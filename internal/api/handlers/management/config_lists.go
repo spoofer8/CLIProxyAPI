@@ -792,18 +792,19 @@ func (h *Handler) PutOpenAICompat(c *gin.Context) {
 }
 func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 	type openAICompatPatch struct {
-		Name                  *string                             `json:"name"`
-		Prefix                *string                             `json:"prefix"`
-		Disabled              *bool                               `json:"disabled"`
-		DisableCooling        json.RawMessage                     `json:"disable-cooling"`
-		BaseURL               *string                             `json:"base-url"`
-		Azure                 *config.OpenAICompatibilityAzure    `json:"azure"`
-		APIKeyEntries         *[]config.OpenAICompatibilityAPIKey `json:"api-key-entries"`
-		Models                *[]config.OpenAICompatibilityModel  `json:"models"`
-		Headers               *map[string]string                  `json:"headers"`
-		SupportPromptCacheKey *bool                               `json:"support-prompt-cache-key"`
-		RequestRetry          *int                                `json:"request-retry"`
-		RequestScopedErrors   *[]config.RequestScopedErrorRule    `json:"request-scoped-errors"`
+		Name                   *string                             `json:"name"`
+		Prefix                 *string                             `json:"prefix"`
+		Disabled               *bool                               `json:"disabled"`
+		DisableCooling         json.RawMessage                     `json:"disable-cooling"`
+		BaseURL                *string                             `json:"base-url"`
+		Azure                  *config.OpenAICompatibilityAzure    `json:"azure"`
+		APIKeyEntries          *[]config.OpenAICompatibilityAPIKey `json:"api-key-entries"`
+		Models                 *[]config.OpenAICompatibilityModel  `json:"models"`
+		Headers                *map[string]string                  `json:"headers"`
+		SupportPromptCacheKey  *bool                               `json:"support-prompt-cache-key"`
+		UseMaxCompletionTokens *bool                               `json:"use-max-completion-tokens"`
+		RequestRetry           *int                                `json:"request-retry"`
+		RequestScopedErrors    *[]config.RequestScopedErrorRule    `json:"request-scoped-errors"`
 	}
 	var body struct {
 		Name  *string            `json:"name"`
@@ -884,6 +885,9 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 	}
 	if body.Value.SupportPromptCacheKey != nil {
 		entry.SupportPromptCacheKey = *body.Value.SupportPromptCacheKey
+	}
+	if body.Value.UseMaxCompletionTokens != nil {
+		entry.UseMaxCompletionTokens = *body.Value.UseMaxCompletionTokens
 	}
 	if body.Value.RequestScopedErrors != nil {
 		entry.RequestScopedErrors = append([]config.RequestScopedErrorRule(nil), *body.Value.RequestScopedErrors...)

@@ -666,6 +666,11 @@ type OpenAICompatibility struct {
 	// APIKeyEntries defines API keys with optional per-key proxy configuration.
 	APIKeyEntries []OpenAICompatibilityAPIKey `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
 
+	// UseMaxCompletionTokens renames the legacy max_tokens parameter to
+	// max_completion_tokens before forwarding. Azure OpenAI and other upstreams
+	// serving GPT-5 / o-series models reject max_tokens outright.
+	UseMaxCompletionTokens bool `yaml:"use-max-completion-tokens,omitempty" json:"use-max-completion-tokens,omitempty"`
+
 	// Azure enables Azure OpenAI deployment-based Chat Completions requests.
 	Azure *OpenAICompatibilityAzure `yaml:"azure,omitempty" json:"azure,omitempty"`
 
