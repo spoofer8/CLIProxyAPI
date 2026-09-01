@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 	log "github.com/sirupsen/logrus"
@@ -162,9 +163,19 @@ func (h *Handler) APICall(c *gin.Context) {
 		reqHeaders[key] = strings.ReplaceAll(value, "$TOKEN$", token)
 	}
 
+	// Requests aimed at a configured openai-compatibility provider honour that
+	// provider's request compatibility settings, so the Web UI connectivity test
+	// exercises the same payload shape the executor would send.
+	data := body.Data
+	if data != "" {
+		if compat := helps.OpenAICompatForRequestURL(h.cfg, urlStr); helps.ShouldPromoteMaxTokensForCompat(compat) {
+			data = string(helps.PromoteMaxTokens([]byte(data)))
+		}
+	}
+
 	var requestBody io.Reader
-	if body.Data != "" {
-		requestBody = strings.NewReader(body.Data)
+	if data != "" {
+		requestBody = strings.NewReader(data)
 	}
 
 	req, errNewRequest := http.NewRequestWithContext(c.Request.Context(), method, urlStr, requestBody)

@@ -38,3 +38,30 @@ func TestShouldPromoteMaxTokensForCompat(t *testing.T) {
 		t.Fatal("enabled compat must promote")
 	}
 }
+
+func TestOpenAICompatForRequestURLMatchesLongestBaseURL(t *testing.T) {
+	cfg := &config.Config{OpenAICompatibility: []config.OpenAICompatibility{
+		{Name: "root", BaseURL: "https://host.example.com/"},
+		{Name: "scoped", BaseURL: "https://host.example.com/openai/v1", UseMaxCompletionTokens: true},
+		{Name: "off", BaseURL: "https://host.example.com/openai/v1", Disabled: true},
+	}}
+	got := OpenAICompatForRequestURL(cfg, "https://host.example.com/openai/v1/chat/completions")
+	if got == nil || got.Name != "scoped" {
+		t.Fatalf("matched provider = %#v", got)
+	}
+	if !ShouldPromoteMaxTokensForCompat(got) {
+		t.Fatal("scoped provider should promote")
+	}
+}
+
+func TestOpenAICompatForRequestURLIgnoresUnrelatedHosts(t *testing.T) {
+	cfg := &config.Config{OpenAICompatibility: []config.OpenAICompatibility{
+		{Name: "azure", BaseURL: "https://host.example.com/openai/v1", UseMaxCompletionTokens: true},
+	}}
+	if got := OpenAICompatForRequestURL(cfg, "https://other.example.com/v1/chat/completions"); got != nil {
+		t.Fatalf("unrelated host matched %#v", got)
+	}
+	if got := OpenAICompatForRequestURL(nil, "https://host.example.com/openai/v1"); got != nil {
+		t.Fatalf("nil config matched %#v", got)
+	}
+}
