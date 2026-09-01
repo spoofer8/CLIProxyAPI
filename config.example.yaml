@@ -666,6 +666,11 @@ nonstream-keepalive-interval: 0
 #     # it to max_completion_tokens before forwarding. Safe to leave on for a provider
 #     # whose upstream accepts max_completion_tokens for every configured model.
 #     use-max-completion-tokens: true
+#     # Upstream request format. "chat" (default) posts to <base-url>/chat/completions.
+#     # "responses" posts to <base-url>/responses instead, which preserves reasoning
+#     # controls that some upstreams (Azure OpenAI GPT-5) reject on chat/completions
+#     # when function tools are present. Only set it if the upstream serves /responses.
+#     wire-api: "responses"
 #     base-url: "https://example-resource.openai.azure.com"
 #     azure:
 #       deployment: "production-gpt-5"      # Azure deployment name (URL-escaped in requests)

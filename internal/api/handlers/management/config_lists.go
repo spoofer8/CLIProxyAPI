@@ -803,6 +803,7 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 		Headers                *map[string]string                  `json:"headers"`
 		SupportPromptCacheKey  *bool                               `json:"support-prompt-cache-key"`
 		UseMaxCompletionTokens *bool                               `json:"use-max-completion-tokens"`
+		WireAPI                *string                             `json:"wire-api"`
 		RequestRetry           *int                                `json:"request-retry"`
 		RequestScopedErrors    *[]config.RequestScopedErrorRule    `json:"request-scoped-errors"`
 	}
@@ -888,6 +889,9 @@ func (h *Handler) PatchOpenAICompat(c *gin.Context) {
 	}
 	if body.Value.UseMaxCompletionTokens != nil {
 		entry.UseMaxCompletionTokens = *body.Value.UseMaxCompletionTokens
+	}
+	if body.Value.WireAPI != nil {
+		entry.WireAPI = strings.TrimSpace(*body.Value.WireAPI)
 	}
 	if body.Value.RequestScopedErrors != nil {
 		entry.RequestScopedErrors = append([]config.RequestScopedErrorRule(nil), *body.Value.RequestScopedErrors...)

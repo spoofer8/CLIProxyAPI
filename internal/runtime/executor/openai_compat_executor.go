@@ -104,9 +104,13 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai")
 	endpoint := "/chat/completions"
+	responsesWire := helps.OpenAICompatUsesResponsesAPI(e.resolveCompatConfig(auth))
 	if opts.Alt == "responses/compact" {
 		to = sdktranslator.FromString("openai-response")
 		endpoint = "/responses/compact"
+	} else if responsesWire {
+		to = sdktranslator.FromString("openai-response")
+		endpoint = "/responses"
 	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
@@ -128,7 +132,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	if helps.ShouldNormalizeOpenAIToolResultsForModel(e.resolveCompatConfig(auth), baseModel, requestedModel) {
 		translated = helps.NormalizeOpenAIToolResultsTextOnly(translated)
 	}
-	if opts.Alt != "responses/compact" && helps.ShouldPromoteMaxTokensForCompat(e.resolveCompatConfig(auth)) {
+	if opts.Alt != "responses/compact" && !responsesWire && helps.ShouldPromoteMaxTokensForCompat(e.resolveCompatConfig(auth)) {
 		translated = helps.PromoteMaxTokens(translated)
 	}
 	if opts.Alt != "responses/compact" {
@@ -326,6 +330,12 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	from := opts.SourceFormat
 	responseFormat := cliproxyexecutor.ResponseFormatOrSource(opts)
 	to := sdktranslator.FromString("openai")
+	responsesWire := helps.OpenAICompatUsesResponsesAPI(e.resolveCompatConfig(auth))
+	streamEndpoint := "/chat/completions"
+	if responsesWire {
+		to = sdktranslator.FromString("openai-response")
+		streamEndpoint = "/responses"
+	}
 	originalPayloadSource := req.Payload
 	if len(opts.OriginalRequest) > 0 {
 		originalPayloadSource = opts.OriginalRequest
@@ -346,7 +356,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	if helps.ShouldNormalizeOpenAIToolResultsForModel(e.resolveCompatConfig(auth), baseModel, requestedModel) {
 		translated = helps.NormalizeOpenAIToolResultsTextOnly(translated)
 	}
-	if opts.Alt != "responses/compact" && helps.ShouldPromoteMaxTokensForCompat(e.resolveCompatConfig(auth)) {
+	if opts.Alt != "responses/compact" && !responsesWire && helps.ShouldPromoteMaxTokensForCompat(e.resolveCompatConfig(auth)) {
 		translated = helps.PromoteMaxTokens(translated)
 	}
 	if opts.Alt != "responses/compact" {
@@ -358,10 +368,12 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 
 	// Request usage data in the final streaming chunk so that token statistics
 	// are captured even when the upstream is an OpenAI-compatible provider.
-	translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
+	if !responsesWire {
+		translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
+	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
-	requestURL, err := e.buildRequestURL(auth, baseURL, "/chat/completions")
+	requestURL, err := e.buildRequestURL(auth, baseURL, streamEndpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -472,6 +484,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			}
 			dataPayload := bytes.TrimSpace(bytes.Join(dataLines, []byte("\n")))
 			isDone := bytes.Equal(dataPayload, []byte("[DONE]"))
+			terminal := responsesWire && openAICompatResponsesTerminalEvent(eventName, dataPayload)
 			if isDone && openAICompatErrorEvent(eventName) {
 				publishStreamError(statusErr{code: http.StatusBadGateway, msg: "upstream error event ended before [DONE]"}, false)
 				return true
@@ -497,7 +510,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 					return true
 				}
 			}
-			if isDone {
+			if isDone || terminal {
 				seenDone = true
 				return true
 			}
@@ -509,6 +522,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			line := scanner.Bytes()
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			streamUsage.ObserveOpenAIStream(line)
+			if responsesWire {
+				if payload := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(line), []byte("data:"))); len(payload) > 0 && json.Valid(payload) {
+					streamUsage.Observe(helps.ParseCodexUsage(payload))
+				}
+			}
 			trimmedLine := bytes.TrimSpace(line)
 			if len(trimmedLine) == 0 {
 				if processFrame() {
@@ -1021,6 +1039,21 @@ func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byt
 		return payload
 	}
 	return helps.SetStringIfDifferent(payload, "model", model)
+}
+
+// openAICompatResponsesTerminalEvent reports whether an SSE frame ends a
+// Responses API stream. That wire format has no [DONE] sentinel: it closes with
+// response.completed (or response.incomplete / response.done).
+func openAICompatResponsesTerminalEvent(eventName string, payload []byte) bool {
+	name := strings.TrimSpace(eventName)
+	if name == "" && json.Valid(payload) {
+		name = gjson.GetBytes(payload, "type").String()
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "response.completed", "response.incomplete", "response.done":
+		return true
+	}
+	return false
 }
 
 func openAICompatErrorEvent(eventName string) bool {

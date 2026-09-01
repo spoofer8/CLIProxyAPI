@@ -666,6 +666,12 @@ type OpenAICompatibility struct {
 	// APIKeyEntries defines API keys with optional per-key proxy configuration.
 	APIKeyEntries []OpenAICompatibilityAPIKey `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
 
+	// WireAPI selects the upstream request format: "chat" (default) targets
+	// /chat/completions, "responses" targets the OpenAI Responses API at
+	// /responses. Responses mode preserves reasoning controls that upstreams
+	// such as Azure OpenAI reject on /chat/completions alongside tools.
+	WireAPI string `yaml:"wire-api,omitempty" json:"wire-api,omitempty"`
+
 	// UseMaxCompletionTokens renames the legacy max_tokens parameter to
 	// max_completion_tokens before forwarding. Azure OpenAI and other upstreams
 	// serving GPT-5 / o-series models reject max_tokens outright.

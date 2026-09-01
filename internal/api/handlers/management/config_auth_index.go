@@ -50,6 +50,7 @@ type openAICompatibilityWithAuthIndex struct {
 	Headers                map[string]string                        `json:"headers,omitempty"`
 	SupportPromptCacheKey  bool                                     `json:"support-prompt-cache-key,omitempty"`
 	UseMaxCompletionTokens bool                                     `json:"use-max-completion-tokens,omitempty"`
+	WireAPI                string                                   `json:"wire-api,omitempty"`
 	DisableCooling         *bool                                    `json:"disable-cooling,omitempty"`
 	RequestRetry           *int                                     `json:"request-retry,omitempty"`
 	RequestScopedErrors    []config.RequestScopedErrorRule          `json:"request-scoped-errors,omitempty"`
@@ -313,6 +314,7 @@ func (h *Handler) openAICompatibilityWithAuthIndex() []openAICompatibilityWithAu
 			Headers:                entry.Headers,
 			SupportPromptCacheKey:  entry.SupportPromptCacheKey,
 			UseMaxCompletionTokens: entry.UseMaxCompletionTokens,
+			WireAPI:                entry.WireAPI,
 			DisableCooling:         entry.DisableCooling,
 			RequestRetry:           entry.RequestRetry,
 			RequestScopedErrors:    entry.RequestScopedErrors,
