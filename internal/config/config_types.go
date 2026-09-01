@@ -666,6 +666,9 @@ type OpenAICompatibility struct {
 	// APIKeyEntries defines API keys with optional per-key proxy configuration.
 	APIKeyEntries []OpenAICompatibilityAPIKey `yaml:"api-key-entries,omitempty" json:"api-key-entries,omitempty"`
 
+	// Azure enables Azure OpenAI deployment-based Chat Completions requests.
+	Azure *OpenAICompatibilityAzure `yaml:"azure,omitempty" json:"azure,omitempty"`
+
 	// Models defines the model configurations including aliases for routing.
 	Models []OpenAICompatibilityModel `yaml:"models" json:"models"`
 
@@ -685,6 +688,15 @@ type OpenAICompatibility struct {
 
 	// RequestScopedErrors configures custom classification rules for upstream errors.
 	RequestScopedErrors []RequestScopedErrorRule `yaml:"request-scoped-errors,omitempty" json:"request-scoped-errors,omitempty"`
+}
+
+// OpenAICompatibilityAzure configures Azure OpenAI's deployment-based Chat Completions endpoint.
+type OpenAICompatibilityAzure struct {
+	// Deployment is the Azure OpenAI deployment name used in the request path.
+	Deployment string `yaml:"deployment" json:"deployment"`
+
+	// APIVersion is sent as the Azure OpenAI api-version query parameter.
+	APIVersion string `yaml:"api-version" json:"api-version"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.

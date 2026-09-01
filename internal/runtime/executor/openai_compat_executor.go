@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -58,9 +59,7 @@ func (e *OpenAICompatExecutor) PrepareRequest(req *http.Request, auth *cliproxya
 		return nil
 	}
 	_, apiKey := e.resolveCredentials(auth)
-	if strings.TrimSpace(apiKey) != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
+	e.applyAuthentication(req, auth, apiKey)
 	var attrs map[string]string
 	if auth != nil {
 		attrs = auth.Attributes
@@ -143,15 +142,16 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	}
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
-	url := strings.TrimSuffix(baseURL, "/") + endpoint
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
+	requestURL, err := e.buildRequestURL(auth, baseURL, endpoint)
+	if err != nil {
+		return resp, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(translated))
 	if err != nil {
 		return resp, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	}
+	e.applyAuthentication(httpReq, auth, apiKey)
 	httpReq.Header.Set("User-Agent", "cli-proxy-openai-compat")
 	var attrs map[string]string
 	if auth != nil {
@@ -165,7 +165,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		authType, authValue = auth.AccountInfo()
 	}
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
-		URL:       url,
+		URL:       requestURL,
 		Method:    http.MethodPost,
 		Headers:   httpReq.Header.Clone(),
 		Body:      translated,
@@ -355,15 +355,16 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	translated = helps.SetBoolIfDifferent(translated, "stream_options.include_usage", true)
 	reporter.SetTranslatedReasoningEffort(translated, to.String())
 
-	url := strings.TrimSuffix(baseURL, "/") + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
+	requestURL, err := e.buildRequestURL(auth, baseURL, "/chat/completions")
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(translated))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	}
+	e.applyAuthentication(httpReq, auth, apiKey)
 	httpReq.Header.Set("User-Agent", "cli-proxy-openai-compat")
 	var attrs map[string]string
 	if auth != nil {
@@ -379,7 +380,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		authType, authValue = auth.AccountInfo()
 	}
 	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
-		URL:       url,
+		URL:       requestURL,
 		Method:    http.MethodPost,
 		Headers:   httpReq.Header.Clone(),
 		Body:      translated,
@@ -924,6 +925,48 @@ func (e *OpenAICompatExecutor) resolveCredentials(auth *cliproxyauth.Auth) (base
 		apiKey = strings.TrimSpace(auth.Attributes["api_key"])
 	}
 	return
+}
+
+func (e *OpenAICompatExecutor) applyAuthentication(req *http.Request, auth *cliproxyauth.Auth, apiKey string) {
+	if req == nil || strings.TrimSpace(apiKey) == "" {
+		return
+	}
+	compat := e.resolveCompatConfig(auth)
+	if compat != nil && compat.Azure != nil {
+		req.Header.Del("Authorization")
+		req.Header.Set("api-key", apiKey)
+		return
+	}
+	req.Header.Del("api-key")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+}
+
+func (e *OpenAICompatExecutor) buildRequestURL(auth *cliproxyauth.Auth, baseURL, endpoint string) (string, error) {
+	compat := e.resolveCompatConfig(auth)
+	if endpoint != "/chat/completions" || compat == nil || compat.Azure == nil {
+		return strings.TrimSuffix(baseURL, "/") + endpoint, nil
+	}
+
+	deployment := strings.TrimSpace(compat.Azure.Deployment)
+	if deployment == "" {
+		return "", fmt.Errorf("openai compat executor: azure deployment is required")
+	}
+	apiVersion := strings.TrimSpace(compat.Azure.APIVersion)
+	if apiVersion == "" {
+		return "", fmt.Errorf("openai compat executor: azure api-version is required")
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("openai compat executor: invalid azure base URL: %w", err)
+	}
+	basePath := strings.TrimSuffix(u.Path, "/")
+	baseEscapedPath := strings.TrimSuffix(u.EscapedPath(), "/")
+	u.Path = basePath + "/openai/deployments/" + deployment + "/chat/completions"
+	u.RawPath = baseEscapedPath + "/openai/deployments/" + url.PathEscape(deployment) + "/chat/completions"
+	query := u.Query()
+	query.Set("api-version", apiVersion)
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 func (e *OpenAICompatExecutor) resolveCompatConfig(auth *cliproxyauth.Auth) *config.OpenAICompatibility {
