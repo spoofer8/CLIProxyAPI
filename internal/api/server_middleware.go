@@ -166,6 +166,12 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 		result, err := manager.Authenticate(c.Request.Context(), c.Request)
 		if err == nil {
 			c.Request = c.Request.WithContext(sdkaccess.WithResult(c.Request.Context(), result))
+			if result != nil && result.Provider == "user" && !userManagementRouteSupported(c.Request.Method, c.Request.URL.Path) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{
+					"message": "This endpoint is not available for user API keys", "type": "permission_error", "code": "endpoint_not_supported",
+				}})
+				return
+			}
 			if result != nil {
 				c.Set("userApiKey", result.Principal)
 				c.Set("accessProvider", result.Provider)

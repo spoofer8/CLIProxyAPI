@@ -20,26 +20,29 @@ type cachedIdentity struct {
 // authState belongs to one store lifetime. Swaps never carry cached identity or
 // last-used writes across databases. Only successful authentications are cached.
 type authState struct {
-	mu          sync.Mutex
-	cache       map[string]cachedIdentity
-	pending     map[string]time.Time
-	generation  uint64
-	ttl         time.Duration
-	closed      bool
-	now         func() time.Time
-	lookup      func(context.Context, string) (store.KeyIdentity, error)
-	touch       func(context.Context, map[string]time.Time) error
-	flushMu     sync.Mutex
-	cancel      context.CancelFunc
-	done        chan struct{}
-	stopTimeout time.Duration
+	scopeID        string
+	mu             sync.Mutex
+	cache          map[string]cachedIdentity
+	pending        map[string]time.Time
+	generation     uint64
+	ttl            time.Duration
+	closed         bool
+	now            func() time.Time
+	lookup         func(context.Context, string) (store.KeyIdentity, error)
+	lookupIdentity func(context.Context, string, string) (store.KeyIdentity, error)
+	touch          func(context.Context, map[string]time.Time) error
+	flushMu        sync.Mutex
+	cancel         context.CancelFunc
+	done           chan struct{}
+	stopTimeout    time.Duration
 }
 
 func newAuthState(db *store.Store, ttl time.Duration) *authState {
 	state := &authState{
 		cache: make(map[string]cachedIdentity), pending: make(map[string]time.Time),
 		ttl: ttl, now: time.Now, lookup: db.LookupActiveKey, touch: db.TouchKeys,
-		done: make(chan struct{}), stopTimeout: 2 * time.Second,
+		lookupIdentity: db.LookupActiveKeyIdentity,
+		done:           make(chan struct{}), stopTimeout: 2 * time.Second,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	state.cancel = cancel
@@ -67,21 +70,34 @@ func (s *authState) run(ctx context.Context) {
 }
 
 func (s *authState) authenticate(ctx context.Context, hash string) (store.KeyIdentity, error) {
+	return s.cachedLookup(hash, func() (store.KeyIdentity, error) { return s.lookup(ctx, hash) })
+}
+
+func (s *authState) validateIdentity(ctx context.Context, userID, keyID string) (store.KeyIdentity, error) {
+	if userID == "" || keyID == "" {
+		return store.KeyIdentity{}, store.ErrNotFound
+	}
+	return s.cachedLookup("identity:"+userID+":"+keyID, func() (store.KeyIdentity, error) {
+		return s.lookupIdentity(ctx, userID, keyID)
+	})
+}
+
+func (s *authState) cachedLookup(cacheKey string, lookup func() (store.KeyIdentity, error)) (store.KeyIdentity, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return store.KeyIdentity{}, store.ErrNotFound
 	}
 	now := s.now()
-	if cached, exists := s.cache[hash]; exists && now.Before(cached.expires) {
+	if cached, exists := s.cache[cacheKey]; exists && now.Before(cached.expires) {
 		s.recordUsedLocked(cached.identity.KeyID, now)
 		s.mu.Unlock()
 		return cached.identity, nil
 	}
-	delete(s.cache, hash)
+	delete(s.cache, cacheKey)
 	generation := s.generation
 	s.mu.Unlock()
-	identity, errLookup := s.lookup(ctx, hash)
+	identity, errLookup := lookup()
 	if errLookup != nil {
 		if !errors.Is(errLookup, store.ErrNotFound) {
 			// Once a database failure is observed, cached credentials must not
@@ -100,7 +116,7 @@ func (s *authState) authenticate(ctx context.Context, hash string) (store.KeyIde
 	if len(s.cache) >= maxCachedKeys {
 		clear(s.cache)
 	}
-	s.cache[hash] = cachedIdentity{identity: identity, expires: s.now().Add(s.ttl)}
+	s.cache[cacheKey] = cachedIdentity{identity: identity, expires: s.now().Add(s.ttl)}
 	s.recordUsedLocked(identity.KeyID, now)
 	return identity, nil
 }

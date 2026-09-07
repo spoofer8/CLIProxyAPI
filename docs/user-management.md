@@ -10,7 +10,7 @@ management secret.
 | --- | --- | --- |
 | 0 | PostgreSQL schema, configuration, startup and reload lifecycle | Implemented |
 | 1 | Users, hashed API keys, management API, usage identity | Implemented |
-| 2 | Monthly token accounting and quota rejection | Planned |
+| 2 | Monthly token accounting and quota rejection | Implemented |
 | 3 | Model/provider permissions and filtered model listings | Planned |
 | 4 | Named administrator login, sessions and audit events | Planned |
 
@@ -117,8 +117,14 @@ A failed replacement leaves the previous user-management settings active and
 logs the failure; unrelated valid configuration changes can still apply.
 Changing settings while retaining the same resolved DSN reuses the pool.
 
-Set `user-management.enabled: false` to disable the feature and close its
-connection pool. Disabled mode does not validate its DSN or duration settings,
+With Phase 2, an admitted request keeps its original database identity across a
+reload. The old store remains open until its usage producers finish and queued
+records drain, so late streaming usage is not charged to the replacement
+database. Shutdown gives cleanup a bounded budget; exceeding it can drop late
+records rather than block service termination indefinitely.
+
+Set `user-management.enabled: false` to disable the feature and retire its
+connection pool after admitted work drains. Disabled mode does not validate its DSN or duration settings,
 does not connect to PostgreSQL, and leaves existing database records intact.
 If the enabled service cannot start because PostgreSQL is unavailable, edit the
 configuration to disable the feature before restarting.
@@ -181,6 +187,11 @@ take up to that TTL to affect a previously cached credential. A database lookup
 failure rejects a user key with HTTP 401; legacy-key authentication can still
 fall through to the existing provider.
 
+Phase 2 also revalidates the user/key before each execution on an established
+Responses WebSocket. An administrator's key revocation, account disable, or
+account deletion rejects subsequent frames with an authentication error even
+when quota enforcement is disabled. Already running upstream work may finish.
+
 ### Management API
 
 All routes below require the existing management secret. They return 404 while
@@ -208,7 +219,8 @@ User objects contain `id`, `email`, `display_name`, `role`, `status`,
 `monthly_token_limit`, `created_at`, and `updated_at`. Key objects contain `id`,
 `user_id`, `key_prefix`, `label`, `status`, `last_used_at`, `created_at`, and
 `revoked_at`. Password hashes and key hashes are never returned. Phase 1 does
-not yet include monthly usage in user responses.
+not include monthly usage in user responses; Phase 2 adds the `usage` field
+described below.
 
 For `PATCH /users/:id`, omitting `monthly_token_limit` preserves its current
 value; JSON `null` clears the override so the configured default applies.
@@ -263,6 +275,15 @@ private management curl configuration. Obtain available model aliases from
 `GET /v1/models`; deployment aliases need not match the names used in an older
 plan or another installation.
 
+Match the request protocol to the configured upstream. The deployment used for
+acceptance serves `azure-4.1-mini` through native Responses: a request to
+`POST /v1/responses` with `{"model":"azure-4.1-mini","input":"Reply with exactly OK.","max_output_tokens":16}`
+succeeds. Its chat payload instead returns HTTP 400, `unsupported_parameter`
+for `messages`, including with the preexisting legacy key. That is a baseline
+upstream protocol mismatch, not a user-key authentication failure. Compare the
+same request using a known-working existing credential before changing account
+permissions or proxy configuration.
+
 User-authenticated requests retain the existing client protocols and model
 names. The access principal is the stable user ID. Consequently,
 `usage.Record.APIKey` contains a user ID for user-key traffic, while legacy-key
@@ -270,13 +291,27 @@ traffic keeps the existing principal representation. Consumers must not assume
 that this field always contains a credential. Multiple keys belonging to one
 user share the same usage identity.
 
+Phase 2 limits user keys to routes with integrated execution/accounting:
+
+- OpenAI chat, completions and Responses, including Responses WebSockets and
+  `/backend-api/codex/responses` aliases.
+- Anthropic messages and token counting.
+- Gemini generation, streaming generation, token counting and interactions.
+- OpenAI/Gemini model listings and individual Gemini model lookup.
+
+Media/images/video, realtime, realtime client secrets, live calls, alpha search,
+and other unsupported authenticated routes return HTTP 403 with
+`endpoint_not_supported` for user keys. Existing legacy credentials keep their
+existing route access. This restriction prevents unaccounted routes from
+bypassing user quotas; it does not indicate that a model permission was denied.
+
 Phase 1 acceptance combines a real upstream completion using a newly issued
 key with integration tests that capture `usage.Record` and verify its user-ID
 principal. The existing `/v0/management/usage-queue` consumes queued records;
 do not poll it as a read-only attribution check. The existing `api-key-usage`
 endpoint reports upstream credential activity, not per-user accounting.
 
-## Monthly quotas — Phase 2, planned
+## Monthly quotas — Phase 2
 
 The default shown above is two million tokens per user per UTC calendar month.
 An explicit user limit overrides the default; a nonpositive effective limit is
@@ -287,15 +322,78 @@ Compare attributed token totals with upstream usage before enabling rejection.
 In Phase 0 these quota fields are configuration only: no counters are written
 and no request is rejected because of a quota.
 
-The planned limit check occurs before execution and rejects an exhausted quota
+The limit check occurs before execution and rejects an exhausted quota
 with HTTP 429 and error code `quota_exceeded`. It does not reserve estimated
 tokens. Concurrent requests can all pass before earlier requests finish or
 their accounting becomes visible, so overshoot can exceed one request's token
 usage. This is not a strict reservation system.
 
-Accounting is intended to run asynchronously. Failed writes during a database
-outage may undercount usage without failing an already executing request.
+Phase 2 accounts through the shared usage-record pipeline, including streamed
+Responses. A bounded queue accepts up to 1,024 pending records and a worker
+writes them asynchronously. Database failures, an overloaded queue, or invalid
+negative/overflowing token values can drop records rather than fail an already
+executing request. Logs identify accounting failures without exposing keys.
 Legacy configured proxy keys remain exempt from user quotas and permissions.
+
+`request_count` counts upstream usage records/attempts, not necessarily client
+HTTP requests. A retry may produce another record. The accounting period is
+the request's start time in UTC, with the current time used only when that
+timestamp is missing. A positive reported total is used as supplied; otherwise
+the total falls back to input plus output tokens. Counters become visible after
+the worker commits, so allow for asynchronous processing when checking them.
+
+Quota reads use a short cache of committed database totals. Accounting writes
+invalidate that cache; queued records are not added optimistically. Concurrent
+requests, usage dispatch and persistence can still race ahead of the recorded
+usage. No request reserves tokens.
+
+### Reporting API — Phase 2
+
+The following endpoints require Phase 2 and management authentication:
+
+```text
+GET /v0/management/usage?period=2026-09&limit=50&offset=0
+GET /v0/management/usage?period=2026-09&user_id=<user-id>
+```
+
+Omitting `period` selects the current UTC month. The response is:
+
+```json
+{
+  "period": "2026-09",
+  "usage": [
+    {
+      "user_id": "<user-id>",
+      "email": "example@example.invalid",
+      "period": "2026-09",
+      "input_tokens": 12,
+      "output_tokens": 2,
+      "total_tokens": 14,
+      "request_count": 1,
+      "updated_at": "2026-09-07T12:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+The all-users view includes accounts with zero usage. `GET /users/:id` also
+includes `usage` containing the same usage fields for the current month while
+retaining its existing account fields. This reporting reads counters and does
+not consume the separate usage queue.
+
+For live acceptance, create a temporary account with a tiny quota while
+production enforcement remains disabled. Run one normal and one streaming
+Responses request, wait for each counter update, and compare the upstream token
+usage with both the reporting API and PostgreSQL. The second request should
+still succeed after recorded usage exceeds the account limit. Test HTTP 429
+separately in a temporary loopback-only process using the same binary/database
+and `enforce: true`; an already exhausted user is rejected before upstream
+model resolution. Stop that process and remove its private configuration and
+temporary account when verification finishes. Production's first-week
+`enforce: false` setting stays unchanged throughout.
 
 ## Permissions, login and audit — later phases
 

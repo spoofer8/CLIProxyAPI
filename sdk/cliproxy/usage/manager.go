@@ -241,15 +241,16 @@ type Plugin interface {
 }
 
 type queueItem struct {
-	ctx    context.Context
-	record Record
+	ctx     context.Context
+	record  Record
+	barrier chan struct{}
 }
 
 // Manager maintains a queue of usage records and delivers them to registered plugins.
 type Manager struct {
 	once     sync.Once
 	stopOnce sync.Once
-	cancel   context.CancelFunc
+	done     chan struct{}
 
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -263,7 +264,7 @@ type Manager struct {
 
 // NewManager constructs a manager with a buffered queue.
 func NewManager(buffer int) *Manager {
-	m := &Manager{}
+	m := &Manager{done: make(chan struct{})}
 	m.cond = sync.NewCond(&m.mu)
 	return m
 }
@@ -274,12 +275,7 @@ func (m *Manager) Start(ctx context.Context) {
 		return
 	}
 	m.once.Do(func() {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		var workerCtx context.Context
-		workerCtx, m.cancel = context.WithCancel(ctx)
-		go m.run(workerCtx)
+		go m.run()
 	})
 }
 
@@ -288,15 +284,45 @@ func (m *Manager) Stop() {
 	if m == nil {
 		return
 	}
+	m.Start(context.Background())
 	m.stopOnce.Do(func() {
-		if m.cancel != nil {
-			m.cancel()
-		}
 		m.mu.Lock()
 		m.closed = true
 		m.mu.Unlock()
 		m.cond.Broadcast()
 	})
+}
+
+// Flush waits until callbacks for every record already queued have returned.
+// It does not stop publishers or wait for work a plugin queues internally.
+func (m *Manager) Flush(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.Start(context.Background())
+	m.mu.Lock()
+	barrier := m.done
+	if !m.closed {
+		barrier = make(chan struct{})
+		m.queue = append(m.queue, queueItem{barrier: barrier})
+		m.cond.Signal()
+	}
+	m.mu.Unlock()
+	select {
+	case <-barrier:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// StopAndWait rejects new records and waits for queued callbacks to finish.
+func (m *Manager) StopAndWait(ctx context.Context) error {
+	m.Stop()
+	return m.Flush(ctx)
 }
 
 // Register appends a plugin to the delivery list.
@@ -333,6 +359,30 @@ func (m *Manager) RegisterNamed(name string, plugin Plugin) {
 	m.pluginsMu.Unlock()
 }
 
+// UnregisterNamed removes a named plugin from future callback selection.
+// A callback already in progress may finish; call Flush to wait for it.
+func (m *Manager) UnregisterNamed(name string) {
+	if m == nil {
+		return
+	}
+	m.pluginsMu.Lock()
+	defer m.pluginsMu.Unlock()
+	index, exists := m.named[strings.TrimSpace(name)]
+	if !exists {
+		return
+	}
+	remaining := make([]Plugin, 0, len(m.plugins)-1)
+	remaining = append(remaining, m.plugins[:index]...)
+	remaining = append(remaining, m.plugins[index+1:]...)
+	m.plugins = remaining
+	delete(m.named, strings.TrimSpace(name))
+	for key, current := range m.named {
+		if current > index {
+			m.named[key] = current - 1
+		}
+	}
+}
+
 // Publish enqueues a usage record for processing. If no plugin is registered
 // the record will be discarded downstream.
 func (m *Manager) Publish(ctx context.Context, record Record) {
@@ -351,7 +401,8 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 	m.cond.Signal()
 }
 
-func (m *Manager) run(ctx context.Context) {
+func (m *Manager) run() {
+	defer close(m.done)
 	for {
 		m.mu.Lock()
 		for !m.closed && len(m.queue) == 0 {
@@ -362,9 +413,14 @@ func (m *Manager) run(ctx context.Context) {
 			return
 		}
 		item := m.queue[0]
+		m.queue[0] = queueItem{}
 		m.queue = m.queue[1:]
 		m.mu.Unlock()
-		m.dispatch(item)
+		if item.barrier != nil {
+			close(item.barrier)
+		} else {
+			m.dispatch(item)
+		}
 	}
 }
 
@@ -403,6 +459,12 @@ func RegisterPlugin(plugin Plugin) { DefaultManager().Register(plugin) }
 
 // RegisterNamedPlugin registers or replaces a named plugin on the default manager.
 func RegisterNamedPlugin(name string, plugin Plugin) { DefaultManager().RegisterNamed(name, plugin) }
+
+// UnregisterNamedPlugin removes a named default-manager plugin.
+func UnregisterNamedPlugin(name string) { DefaultManager().UnregisterNamed(name) }
+
+// FlushDefault waits for delivery of records already queued on the default manager.
+func FlushDefault(ctx context.Context) error { return DefaultManager().Flush(ctx) }
 
 // PublishRecord publishes a record using the default manager.
 func PublishRecord(ctx context.Context, record Record) { DefaultManager().Publish(ctx, record) }

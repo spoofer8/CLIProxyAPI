@@ -34,6 +34,9 @@ func (r *Runtime) RegisterManagementRoutes(group *gin.RouterGroup) {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
+		requestCtx, cancel := r.operationContext(c.Request.Context())
+		defer cancel()
+		c.Request = c.Request.WithContext(requestCtx)
 		c.Header("Cache-Control", "no-store")
 		c.Next()
 	})
@@ -45,6 +48,7 @@ func (r *Runtime) RegisterManagementRoutes(group *gin.RouterGroup) {
 	group.GET("/users/:id/keys", r.listKeys)
 	group.POST("/users/:id/keys", r.createKey)
 	group.DELETE("/keys/:keyId", r.revokeKey)
+	group.GET("/usage", r.listUsage)
 }
 
 func newID() (string, error) {
@@ -217,16 +221,24 @@ func (r *Runtime) getUser(c *gin.Context) {
 		return
 	}
 	var user store.User
+	var monthly store.MonthlyUsage
 	errGet := r.withStore(false, func(db *store.Store) error {
 		var errStore error
 		user, errStore = db.GetUser(c.Request.Context(), id)
+		if errStore != nil {
+			return errStore
+		}
+		monthly, errStore = db.GetMonthlyUsage(c.Request.Context(), id, time.Now().UTC().Format("2006-01"))
 		return errStore
 	})
 	if errGet != nil {
 		respondError(c, errGet)
 		return
 	}
-	c.JSON(http.StatusOK, user)
+	c.JSON(http.StatusOK, struct {
+		store.User
+		Usage store.MonthlyUsage `json:"usage"`
+	}{User: user, Usage: monthly})
 }
 
 func (r *Runtime) updateUser(c *gin.Context) {

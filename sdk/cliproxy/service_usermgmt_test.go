@@ -154,6 +154,10 @@ func TestServiceUserManagementReloadEnableFailureDisable(t *testing.T) {
 	if service.accessManager != manager || len(manager.Providers()) != 0 {
 		t.Fatal("disable reload replaced the service manager or retained a user provider")
 	}
+	// Disabled scopes now drain producers and accounting asynchronously.
+	if errClose := service.userManagement.Close(); errClose != nil {
+		t.Fatal(errClose)
+	}
 	if errHealth := initial.Health(ctx); errHealth == nil {
 		t.Fatal("disable reload left the previous connection pool open")
 	}

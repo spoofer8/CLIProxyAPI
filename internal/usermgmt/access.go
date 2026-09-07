@@ -81,7 +81,8 @@ func (p *userAccessProvider) Authenticate(ctx context.Context, request *http.Req
 		return &sdkaccess.Result{
 			Provider: AccessProviderName, Principal: identity.UserID,
 			Metadata: map[string]string{
-				"user_email": identity.Email, "key_id": identity.KeyID,
+				UsageScopeMetadataKey: state.scopeID,
+				"user_email":          identity.Email, "key_id": identity.KeyID,
 				"role": identity.Role, "source": candidate.source,
 			},
 		}, nil

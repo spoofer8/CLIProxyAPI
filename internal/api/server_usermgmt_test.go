@@ -20,7 +20,6 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -109,18 +108,17 @@ func TestServerUserManagementHTTPAuthenticationAndReload(t *testing.T) {
 	cfg.RemoteManagement.SecretKey = string(secretHash)
 	cfg.UserManagement.DSN = dsn
 	preserveConfigAccessProvider(t)
-	server := NewServer(cfg, nil, manager, filepath.Join(t.TempDir(), "config.yaml"), WithUserManagement(&runtime),
-		WithRouterConfigurator(func(engine *gin.Engine, base *handlers.BaseAPIHandler, _ *config.Config) {
-			engine.GET("/test-user-identity", AuthMiddleware(manager), func(c *gin.Context) {
-				ctx, cancel := base.GetContextWithCancel(nil, c, context.Background())
-				defer cancel()
-				// Execution identity must come from the authenticated snapshot even
-				// if a later handler changes mutable Gin metadata.
-				c.Set("userApiKey", "reused-gin-principal")
-				identity, _ := sdkaccess.ResultFromContext(ctx)
-				c.JSON(http.StatusOK, gin.H{"identity": identity, "usage_principal": helps.APIKeyFromContext(ctx)})
-			})
-		}))
+	server := NewServer(cfg, nil, manager, filepath.Join(t.TempDir(), "config.yaml"), WithUserManagement(&runtime))
+	identityEngine := gin.New()
+	identityEngine.GET("/v1/models", AuthMiddleware(manager), func(c *gin.Context) {
+		ctx, cancel := server.handlers.GetContextWithCancel(nil, c, context.Background())
+		defer cancel()
+		c.Set("userApiKey", "reused-gin-principal")
+		identity, _ := sdkaccess.ResultFromContext(ctx)
+		c.JSON(http.StatusOK, gin.H{"identity": identity, "usage_principal": helps.APIKeyFromContext(ctx)})
+	})
+	identityServer := httptest.NewServer(identityEngine)
+	t.Cleanup(identityServer.Close)
 	httpServer := httptest.NewServer(server.engine)
 	t.Cleanup(httpServer.Close)
 	request := func(method, path, key, body string, want int) map[string]json.RawMessage {
@@ -181,7 +179,12 @@ func TestServerUserManagementHTTPAuthenticationAndReload(t *testing.T) {
 			userManagementHTTPResponse(t, httpServer.Client(), req, http.StatusOK)
 		})
 	}
-	identityResponse := request(http.MethodGet, "/test-user-identity", key, "", http.StatusOK)
+	identityRequest, errIdentityRequest := http.NewRequest(http.MethodGet, identityServer.URL+"/v1/models", nil)
+	if errIdentityRequest != nil {
+		t.Fatal(errIdentityRequest)
+	}
+	identityRequest.Header.Set("Authorization", "Bearer "+key)
+	identityResponse := userManagementHTTPResponse(t, identityServer.Client(), identityRequest, http.StatusOK)
 	var identity sdkaccess.Result
 	var usagePrincipal string
 	if json.Unmarshal(identityResponse["identity"], &identity) != nil || json.Unmarshal(identityResponse["usage_principal"], &usagePrincipal) != nil {

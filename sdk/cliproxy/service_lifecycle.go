@@ -53,15 +53,17 @@ func (s *Service) Run(ctx context.Context) error {
 	}()
 
 	usage.StartDefault(ctx)
+	s.userManagement.SetUsageFlusher(usage.FlushDefault)
+	usage.RegisterNamedPlugin(s.userManagement.UsagePluginName(), &s.userManagement)
 	homeEnabled := s.cfg != nil && s.cfg.Home.Enabled
 	if homeEnabled {
 		forceHomeRuntimeConfig(s.cfg)
 		redisqueue.SetUsageStatisticsEnabled(true)
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
 	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
 		if err := s.Shutdown(shutdownCtx); err != nil {
 			log.Errorf("service shutdown returned error: %v", err)
 		}
@@ -357,13 +359,14 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
-		usage.StopDefault()
-		if errClose := s.userManagement.Close(); errClose != nil {
+		if errClose := s.userManagement.CloseContext(ctx); errClose != nil {
 			log.WithError(errClose).Error("failed to close user management database")
 			if shutdownErr == nil {
 				shutdownErr = errClose
 			}
 		}
+		usage.UnregisterNamedPlugin(s.userManagement.UsagePluginName())
+		usage.StopDefault()
 		s.syncUserManagementAccess()
 	})
 	return shutdownErr

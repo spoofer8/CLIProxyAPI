@@ -206,6 +206,9 @@ func shouldExposeResponsesUpstreamError(errMsg *interfaces.ErrorMessage) bool {
 	if errMsg == nil {
 		return false
 	}
+	if handlers.IsRequestHookError(errMsg.Error) {
+		return true
+	}
 	return clienterror.IsRequestFault(responsesWebsocketErrorStatus(errMsg), errMsg.Error)
 }
 
@@ -539,6 +542,9 @@ func buildResponsesWebsocketErrorPayload(errMsg *interfaces.ErrorMessage) ([]byt
 	}
 
 	body := handlers.BuildErrorResponseBody(status, errText)
+	if errMsg != nil && handlers.IsRequestHookError(errMsg.Error) && errMsg.DirectResponse && json.Valid(errMsg.Body) {
+		body = errMsg.Body
+	}
 	payload := []byte(`{}`)
 	var errSet error
 	payload, errSet = sjson.SetBytes(payload, "type", wsEventTypeError)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -28,6 +29,19 @@ func (h *BaseAPIHandler) ExecuteImageStreamWithAuthManager(ctx context.Context, 
 }
 
 func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProtocol, responseProtocol, modelName, originalRequestedModel string, rawJSON []byte, alt, executorPluginID string, execOptions modelExecutionOptions) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
+	release, errLease := sdkaccess.BeginRequestLease(ctx)
+	if errLease != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- requestHookError(errLease)
+		close(errChan)
+		return nil, nil, errChan
+	}
+	leaseTransferred := false
+	defer func() {
+		if !leaseTransferred {
+			release()
+		}
+	}()
 	if h.AuthManager != nil && h.AuthManager.HomeEnabled() {
 		errChan := make(chan *interfaces.ErrorMessage, 1)
 		errChan <- &interfaces.ErrorMessage{StatusCode: http.StatusServiceUnavailable, Error: fmt.Errorf("plugin executor routing is unavailable while Home is enabled")}
@@ -143,7 +157,9 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 	if responseProtocol == "openai-response" {
 		responseSSEValidator = &sseJSONValidationState{}
 	}
+	leaseTransferred = true
 	go func() {
+		defer release()
 		completionOutcome := pluginapi.RequestCompletionSucceeded
 		completionStatus := http.StatusOK
 		var completionErr error
@@ -291,6 +307,14 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 }
 
 func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context, entryProtocol, exitProtocol, modelName string, rawJSON []byte, alt string, allowImageModel bool, execOptions modelExecutionOptions) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
+	release, guardError := beginRequestExecution(ctx)
+	if guardError != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- guardError
+		close(errChan)
+		return nil, nil, errChan
+	}
+	defer release()
 	originalRequestedModel := modelName
 	routeDecision, preparedRoute := preparedModelRouteFromContext(ctx, execOptions.SkipRouterPluginID)
 	if !preparedRoute {

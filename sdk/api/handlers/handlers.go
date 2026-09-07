@@ -406,6 +406,9 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	if result, ok := sdkaccess.ResultFromContext(requestCtx); ok {
 		parentCtx = sdkaccess.WithResult(parentCtx, result)
 	}
+	if hooks, ok := sdkaccess.RequestHooksFromContext(requestCtx); ok {
+		parentCtx = sdkaccess.WithRequestHooks(parentCtx, hooks)
+	}
 
 	if requestCtx != nil && logging.GetRequestID(parentCtx) == "" {
 		if requestID := logging.GetRequestID(requestCtx); requestID != "" {

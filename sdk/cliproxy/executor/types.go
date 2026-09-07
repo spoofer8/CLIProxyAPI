@@ -245,6 +245,8 @@ type StreamResult struct {
 	// Headers carries upstream HTTP response headers from the initial connection.
 	Headers http.Header
 	// Chunks is the channel of streaming payload units.
+	// Producers must publish their final usage before closing it. Cancellation
+	// may omit usage, but the channel must still close after the producer exits.
 	Chunks <-chan StreamChunk
 }
 
