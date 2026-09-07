@@ -64,6 +64,12 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 	}()
 
+	if s.cfg != nil {
+		if errUserManagement := s.userManagement.Apply(ctx, s.cfg.UserManagement); errUserManagement != nil {
+			return fmt.Errorf("cliproxy: initialize user management: %w", errUserManagement)
+		}
+	}
+
 	if !homeEnabled {
 		if errEnsureAuthDir := s.ensureAuthDir(); errEnsureAuthDir != nil {
 			return errEnsureAuthDir
@@ -346,6 +352,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 
 		usage.StopDefault()
+		if errClose := s.userManagement.Close(); errClose != nil {
+			log.WithError(errClose).Error("failed to close user management database")
+			if shutdownErr == nil {
+				shutdownErr = errClose
+			}
+		}
 	})
 	return shutdownErr
 }

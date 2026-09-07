@@ -340,6 +340,10 @@ func isKnownDefaultValue(path []string, node *yaml.Node) bool {
 			return node.Value == "plugins"
 		case "routing.strategy":
 			return node.Value == "round-robin"
+		case "user-management.session.ttl":
+			return node.Value == DefaultUserManagementSessionTTL
+		case "user-management.cache.ttl":
+			return node.Value == DefaultUserManagementCacheTTL
 		}
 	}
 

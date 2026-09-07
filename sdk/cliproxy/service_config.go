@@ -106,6 +106,10 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		log.WithError(errValidate).Warn("rejected config update with invalid credential weights")
 		return configCommit{}
 	}
+	if errValidate := newCfg.UserManagement.Validate(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with invalid user management settings")
+		return configCommit{}
+	}
 
 	s.cfgMu.Lock()
 	s.cfg = newCfg
@@ -139,6 +143,11 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false
+	}
+	if errUserManagement := s.userManagement.Apply(ctx, cfg.UserManagement); errUserManagement != nil {
+		// Preserve the last working domain store while unrelated config changes
+		// still apply. The active settings are exposed by Runtime.Snapshot.
+		log.WithError(errUserManagement).Error("user management config update rejected; previous user management settings remain active")
 	}
 
 	if !s.applyManagerConfig(ctx, commit) {
