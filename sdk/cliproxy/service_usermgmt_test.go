@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
 
@@ -80,6 +81,9 @@ func TestServiceUserManagementRunClosesStoreOnStartupFailure(t *testing.T) {
 		} else if errHealth := opened.Health(ctx); errHealth != nil {
 			t.Errorf("database was unhealthy during startup: %v", errHealth)
 		}
+		if providers := service.accessManager.Providers(); len(providers) != 1 || providers[0].Identifier() != "user" {
+			t.Error("startup did not install the manager-local user provider")
+		}
 		return nil, providerFailure
 	})
 
@@ -95,12 +99,16 @@ func TestServiceUserManagementRunClosesStoreOnStartupFailure(t *testing.T) {
 	if errHealth := opened.Health(context.Background()); errHealth == nil {
 		t.Fatal("deferred service shutdown left its connection pool open")
 	}
+	if len(service.accessManager.Providers()) != 0 {
+		t.Fatal("shutdown left the manager-local user provider installed")
+	}
 }
 
 func TestServiceUserManagementReloadEnableFailureDisable(t *testing.T) {
 	dsn := serviceUserManagementTestDSN(t)
 	ctx := context.Background()
-	service := &Service{cfg: &config.Config{}}
+	manager := sdkaccess.NewManager()
+	service := &Service{cfg: &config.Config{}, accessManager: manager}
 	t.Cleanup(func() {
 		if errClose := service.userManagement.Close(); errClose != nil {
 			t.Error(errClose)
@@ -113,6 +121,9 @@ func TestServiceUserManagementReloadEnableFailureDisable(t *testing.T) {
 	initial, active := service.userManagement.Snapshot()
 	if initial == nil || !active.Enabled {
 		t.Fatal("configuration reload did not enable user management")
+	}
+	if providers := manager.Providers(); len(providers) != 1 || providers[0].Identifier() != "user" {
+		t.Fatal("configuration reload did not install the user provider")
 	}
 	if errHealth := initial.Health(ctx); errHealth != nil {
 		t.Fatalf("enabled database is unhealthy: %v", errHealth)
@@ -139,6 +150,9 @@ func TestServiceUserManagementReloadEnableFailureDisable(t *testing.T) {
 	}
 	if current, active = service.userManagement.Snapshot(); current != nil || active.Enabled {
 		t.Fatal("disable reload left user management active")
+	}
+	if service.accessManager != manager || len(manager.Providers()) != 0 {
+		t.Fatal("disable reload replaced the service manager or retained a user provider")
 	}
 	if errHealth := initial.Health(ctx); errHealth == nil {
 		t.Fatal("disable reload left the previous connection pool open")

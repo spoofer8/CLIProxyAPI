@@ -3,13 +3,15 @@ package access
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 )
 
 // Manager coordinates authentication providers.
 type Manager struct {
-	mu        sync.RWMutex
-	providers []Provider
+	mu                sync.RWMutex
+	providers         []Provider
+	priorityProviders []Provider
 }
 
 // NewManager constructs an empty manager.
@@ -17,7 +19,7 @@ func NewManager() *Manager {
 	return &Manager{}
 }
 
-// SetProviders replaces the active provider list.
+// SetProviders replaces the reconciled provider list without changing priority providers.
 func (m *Manager) SetProviders(providers []Provider) {
 	if m == nil {
 		return
@@ -29,6 +31,28 @@ func (m *Manager) SetProviders(providers []Provider) {
 	m.mu.Unlock()
 }
 
+// SetPriorityProviders replaces manager-local providers evaluated before configured
+// and plugin providers. These providers are never added to the global registry.
+func (m *Manager) SetPriorityProviders(providers []Provider) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.priorityProviders = append([]Provider(nil), providers...)
+	m.mu.Unlock()
+}
+
+// ConfiguredProviders returns the list installed by SetProviders, excluding
+// manager-local priority providers when comparing configuration changes.
+func (m *Manager) ConfiguredProviders() []Provider {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]Provider(nil), m.providers...)
+}
+
 // Providers returns a snapshot of the active providers.
 func (m *Manager) Providers() []Provider {
 	if m == nil {
@@ -36,8 +60,27 @@ func (m *Manager) Providers() []Provider {
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	snapshot := make([]Provider, len(m.providers))
-	copy(snapshot, m.providers)
+	snapshot := make([]Provider, 0, len(m.priorityProviders)+len(m.providers))
+	priorityIDs := make(map[string]struct{}, len(m.priorityProviders))
+	for _, provider := range m.priorityProviders {
+		if provider == nil {
+			continue
+		}
+		id := strings.TrimSpace(provider.Identifier())
+		if _, exists := priorityIDs[id]; exists {
+			continue
+		}
+		priorityIDs[id] = struct{}{}
+		snapshot = append(snapshot, provider)
+	}
+	for _, provider := range m.providers {
+		if provider == nil {
+			continue
+		}
+		if _, exists := priorityIDs[strings.TrimSpace(provider.Identifier())]; !exists {
+			snapshot = append(snapshot, provider)
+		}
+	}
 	return snapshot
 }
 

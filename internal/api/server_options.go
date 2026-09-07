@@ -9,6 +9,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
@@ -25,12 +26,23 @@ type serverOptionConfig struct {
 	postAuthHook          auth.PostAuthHook
 	postAuthPersistHook   auth.PostAuthHook
 	pluginHost            *pluginhost.Host
+	userManagement        *usermgmt.Runtime
 	configReloadHook      func(context.Context, *config.Config)
 	exampleAPIKeySafeMode bool
 }
 
 // ServerOption customises HTTP server construction.
 type ServerOption func(*serverOptionConfig)
+
+// WithUserManagement attaches the service-owned runtime, including while it is
+// disabled, so management routes can become available after configuration reload.
+// If NewServer receives no access manager, the server creates one whose providers
+// remain empty while the feature is disabled, preserving the caller's auth bypass.
+func WithUserManagement(runtime *usermgmt.Runtime) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.userManagement = runtime
+	}
+}
 
 func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
 	configDir := filepath.Dir(configPath)

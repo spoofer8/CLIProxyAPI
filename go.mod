@@ -17,6 +17,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/klauspost/compress v1.17.4
 	github.com/minio/minio-go/v7 v7.0.66
+	github.com/oklog/ulid/v2 v2.1.1
 	github.com/pion/ice/v4 v4.3.0
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/rtp v1.10.4

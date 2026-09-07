@@ -19,6 +19,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	coresession "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/session"
@@ -401,6 +402,9 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	var requestCtx context.Context
 	if c != nil && c.Request != nil {
 		requestCtx = c.Request.Context()
+	}
+	if result, ok := sdkaccess.ResultFromContext(requestCtx); ok {
+		parentCtx = sdkaccess.WithResult(parentCtx, result)
 	}
 
 	if requestCtx != nil && logging.GetRequestID(parentCtx) == "" {

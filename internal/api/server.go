@@ -26,6 +26,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -62,6 +63,8 @@ type Server struct {
 
 	// accessManager handles request authentication providers.
 	accessManager *sdkaccess.Manager
+	// ownsAccessManager preserves nil-manager bypass while optional user management is inactive.
+	ownsAccessManager bool
 
 	// requestLogger is the request logger instance for dynamic configuration updates.
 	requestLogger logging.RequestLogger
@@ -83,7 +86,8 @@ type Server struct {
 	mgmt *managementHandlers.Handler
 
 	// pluginHost owns dynamic plugin Management API route dispatch.
-	pluginHost *pluginhost.Host
+	pluginHost     *pluginhost.Host
+	userManagement *usermgmt.Runtime
 
 	// managementRoutesRegistered tracks whether the management routes have been attached to the engine.
 	managementRoutesRegistered atomic.Bool
@@ -121,6 +125,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	}
 	for i := range opts {
 		opts[i](optionState)
+	}
+	ownsAccessManager := optionState.userManagement != nil && accessManager == nil
+	if ownsAccessManager {
+		accessManager = sdkaccess.NewManager()
 	}
 	// Set gin mode
 	if !cfg.Debug {
@@ -173,6 +181,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		handlers:            handlers.NewBaseAPIHandlers(effectiveSDKConfig(cfg), authManager),
 		cfg:                 cfg,
 		accessManager:       accessManager,
+		ownsAccessManager:   ownsAccessManager,
 		requestLogger:       requestLogger,
 		loggerToggle:        toggle,
 		configFilePath:      configFilePath,
@@ -180,6 +189,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		envManagementSecret: envManagementSecret,
 		wsRoutes:            make(map[string]struct{}),
 		pluginHost:          optionState.pluginHost,
+		userManagement:      optionState.userManagement,
 
 		exampleAPIKeySafeModeEnabled: optionState.exampleAPIKeySafeMode,
 	}
@@ -235,7 +245,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != ""
 	s.managementRoutesEnabled.Store(hasManagementSecret)
 	redisqueue.SetEnabled(hasManagementSecret || (cfg != nil && cfg.Home.Enabled))
-	if hasManagementSecret {
+	if hasManagementSecret || s.userManagement != nil {
 		s.registerManagementRoutes()
 	}
 	s.refreshPluginManagementRoutes()

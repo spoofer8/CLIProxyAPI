@@ -149,6 +149,7 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 		// still apply. The active settings are exposed by Runtime.Snapshot.
 		log.WithError(errUserManagement).Error("user management config update rejected; previous user management settings remain active")
 	}
+	s.syncUserManagementAccess()
 
 	if !s.applyManagerConfig(ctx, commit) {
 		return false

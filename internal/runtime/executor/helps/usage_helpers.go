@@ -16,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
@@ -519,6 +520,11 @@ func (r *usageTTFTReadCloser) Read(p []byte) (int, error) {
 func APIKeyFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
+	}
+	// User attribution is immutable; legacy/Home providers may intentionally
+	// resolve a different usage identity into Gin after frontend authentication.
+	if result, ok := sdkaccess.ResultFromContext(ctx); ok && result.Provider == "user" {
+		return result.Principal
 	}
 	ginCtx, ok := ctx.Value("gin").(*gin.Context)
 	if !ok || ginCtx == nil {
