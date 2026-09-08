@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/tidwall/sjson"
 )
@@ -219,12 +220,17 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			}
 			execute := func() (cliproxyexecutor.Response, error) {
 				if countTokens {
-					return selection.Executor.CountTokens(executorCtx, preparedAuth, execReq, execOpts)
+					return executeWithRequestPolicy(executorCtx, selection.Executor, preparedAuth, execReq, execOpts, true)
 				}
-				return selection.Executor.Execute(execCtx, preparedAuth, execReq, execOpts)
+				return executeWithRequestPolicy(execCtx, selection.Executor, preparedAuth, execReq, execOpts, false)
 			}
 			startHomeExec := time.Now()
 			response, errExecute = execute()
+			if sdkaccess.IsPolicyError(errExecute) {
+				releaseAttempt()
+				selection.End("policy_denied")
+				return cliproxyexecutor.Response{}, errExecute
+			}
 			errExecute = markUpstreamExecutionAttemptFromContext(execCtx, errExecute)
 			durationHomeExec := time.Since(startHomeExec)
 			if countTokens {

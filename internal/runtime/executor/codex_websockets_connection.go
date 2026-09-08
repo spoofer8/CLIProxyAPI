@@ -47,7 +47,11 @@ func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *
 	return conn, closer, resp, err
 }
 
-func writeCodexWebsocketMessage(sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+func writeCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+	if errPolicy := helps.AuthorizeOutboundRequest(ctx, payload, ""); errPolicy != nil {
+		return errPolicy
+	}
+	cliproxyexecutor.MarkUpstreamAttempt(ctx)
 	if sess != nil {
 		return sess.writeMessage(conn, websocket.TextMessage, payload)
 	}

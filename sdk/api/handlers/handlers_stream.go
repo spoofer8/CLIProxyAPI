@@ -75,12 +75,21 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		close(errChan)
 		return nil, nil, errChan
 	}
+	execCtx = pluginRequestPolicyContext(execCtx, executorPluginID, req)
+	if policyError := authorizePluginRequest(execCtx, executorPluginID, req); policyError != nil {
+		lifecycle.completeError(execCtx, policyError)
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- policyError
+		close(errChan)
+		return nil, nil, errChan
+	}
 	var reporter *helps.UsageReporter
 	if !execOptions.InternalSource {
 		reporter = helps.NewUsageReporter(execCtx, executorPluginID, modelName, nil)
 		reporter.SetTranslatedReasoningEffort(req.Payload, entryProtocol)
 	}
 	streamResult, errStream := host.ExecutePluginExecutorStream(execCtx, executorPluginID, req, opts)
+	errStream = sdkaccess.NormalizePolicyError(errStream)
 	if errStream != nil {
 		if reporter != nil && !nestedTracker.hasNestedExecution() {
 			reporter.PublishFailure(execCtx, errStream)
@@ -316,6 +325,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	}
 	defer release()
 	originalRequestedModel := modelName
+	ctx = requestPolicyContext(ctx, originalRequestedModel, modelName, execOptions.InternalSource)
 	routeDecision, preparedRoute := preparedModelRouteFromContext(ctx, execOptions.SkipRouterPluginID)
 	if !preparedRoute {
 		routeDecision = h.applyModelRouter(ctx, entryProtocol, modelName, rawJSON, true, execOptions)
@@ -338,6 +348,14 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		return nil, nil, errChan
 	}
 	providers = adjustExecutionProvidersForEntryProtocol(entryProtocol, providers)
+	ctx = requestPolicyContext(ctx, originalRequestedModel, normalizedModel, execOptions.InternalSource)
+	providers, errMsg = filterRequestProviders(ctx, providers)
+	if errMsg != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- errMsg
+		close(errChan)
+		return nil, nil, errChan
+	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
 	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)

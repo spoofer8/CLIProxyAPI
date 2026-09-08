@@ -11,7 +11,7 @@ management secret.
 | 0 | PostgreSQL schema, configuration, startup and reload lifecycle | Implemented |
 | 1 | Users, hashed API keys, management API, usage identity | Implemented |
 | 2 | Monthly token accounting and quota rejection | Implemented |
-| 3 | Model/provider permissions and filtered model listings | Planned |
+| 3 | Model/provider permissions and filtered model listings | Implemented |
 | 4 | Named administrator login, sessions and audit events | Planned |
 
 Phase 0 creates the tables needed by later phases. Their presence does not mean
@@ -395,12 +395,94 @@ model resolution. Stop that process and remove its private configuration and
 temporary account when verification finishes. Production's first-week
 `enforce: false` setting stays unchanged throughout.
 
-## Permissions, login and audit — later phases
+## Permissions — Phase 3
 
-Phase 3 will add model/provider permission rules and filter model listings for
-the authenticated user. The planned default is unrestricted access when there
-are no rules, with deny rules taking precedence. Permission settings are not
-enforced by Phase 0.
+Phase 3 adds model/provider rules and filtered model listings for the
+authenticated user. An empty rule set is unrestricted; deny rules take
+precedence. These settings require a Phase 3 build and are not enforced by
+earlier phases.
+
+Model rules refer to model names and aliases. A model allow rule such as
+`azure-*` restricts the visible model list and permitted executions. Execution
+checks also run after routing so that aliases, provider fallback, or a changed
+model in a later Responses WebSocket frame cannot bypass the policy.
+
+Patterns match the entire value. `*` matches zero or more characters, including
+`/`; `?` matches one Unicode character. Other characters are literal. Model
+matching is case-sensitive and recognizes the base name of reasoning-suffixed
+aliases. Model allowlists match requested/resolved visible aliases, so an
+allowed alias can still map to a differently named upstream deployment. Model
+deny rules also check the final execution/payload model names.
+
+Final outbound checks include model changes made by payload overrides and
+deployment/model selectors in upstream URLs. For user-key traffic, ambiguous
+duplicate or differently cased root `model` selectors are rejected, and final
+payload inspection is limited to 64 MiB. Nested model strings in user/tool
+content are not routing selectors. Legacy-key requests keep their existing
+payload handling.
+
+OpenAI-compatible providers have a configured friendly name and an internal
+name. For example, `azure-openai` maps to
+`openai-compatible-azure-openai`. Use the provider's actual configuration name;
+it is separate from the client-visible model alias.
+
+Provider patterns are normalized to lowercase and match both the canonical
+name and the friendly name without its `openai-compatible-` prefix. Model and
+provider allowlists constrain their scopes independently: when both exist, the
+request must satisfy both. A matching deny in either scope wins. A deny-only
+scope permits values that do not match its deny rules. A policy database error
+returns 503 rather than treating an unavailable rule set as unrestricted.
+
+### Permission management API
+
+```text
+GET /v0/management/users/:id/permissions
+PUT /v0/management/users/:id/permissions
+```
+
+Both return HTTP 200 with `{"permissions":[{"scope":"model","value":"azure-*","effect":"allow"}]}`.
+`PUT` atomically replaces the complete set and returns its normalized form.
+`scope` must be `model` or `provider`; `effect` must be `allow` or `deny` and
+defaults to `allow` when omitted. The set permits at most 128 rules, each with
+a value of at most 256 bytes. Duplicate normalized scope/value pairs and
+invalid input return 400 without partially replacing the policy.
+
+Using the private curl authorization file from the user-management examples:
+
+```sh
+# Allow Azure aliases, with one explicit exception.
+curl --fail-with-body --config "$CURL_AUTH" -X PUT "$MGMT/users/$USER_ID/permissions" \
+  -H 'Content-Type: application/json' \
+  --data '{"permissions":[{"scope":"model","value":"azure-*","effect":"allow"},{"scope":"model","value":"azure-opus-5","effect":"deny"}]}'
+
+curl --fail-with-body --config "$CURL_AUTH" "$MGMT/users/$USER_ID/permissions"
+
+# Replace the model rules with a provider allowlist.
+curl --fail-with-body --config "$CURL_AUTH" -X PUT "$MGMT/users/$USER_ID/permissions" \
+  -H 'Content-Type: application/json' \
+  --data '{"permissions":[{"scope":"provider","value":"azure-openai","effect":"allow"}]}'
+
+# Clear all rules. Omitted or null permissions are rejected; [] is explicit.
+curl --fail-with-body --config "$CURL_AUTH" -X PUT "$MGMT/users/$USER_ID/permissions" \
+  -H 'Content-Type: application/json' --data '{"permissions":[]}'
+```
+
+Permission changes must take effect for the same previously authenticated key;
+clients do not need a replacement key after each policy edit. Clearing the rule
+set restores unrestricted access within the supported user-key routes. Legacy
+configured proxy keys remain exempt.
+
+### Phase 3 verification
+
+The complete Linux test suite, feature-specific PostgreSQL/race tests, final
+outbound-policy executor race tests, build, and repository invariant checks
+passed. Broader executor race/stress runs also reproduced two preexisting
+issues on the exact pre-Phase-3 revision (`250aab2`): a Claude shared-credential
+metadata race and an intermittent Antigravity pooled-connection count failure.
+Those unrelated baseline issues were not changed by this feature; the passing
+checks above do not constitute a clean repository-wide race-test result.
+
+## Named login and audit — Phase 4, planned
 
 Phase 4 will add administrator email/password login, revocable sessions, and
 audit events. The upstream management panel currently has its own shared-key

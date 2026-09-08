@@ -15,7 +15,7 @@ type requestHookFailure struct{ error }
 // even on transports that hide retryable upstream failures.
 func IsRequestHookError(err error) bool {
 	var failure *requestHookFailure
-	return errors.As(err, &failure)
+	return errors.As(err, &failure) || sdkaccess.IsPolicyError(err)
 }
 
 func beginRequestExecution(ctx context.Context) (func(), *interfaces.ErrorMessage) {

@@ -25,7 +25,8 @@ import (
 //
 // Returns:
 //   - *http.Client: An HTTP client with configured proxy or transport
-func NewProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, timeout time.Duration) *http.Client {
+func NewProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth, timeout time.Duration) (result *http.Client) {
+	defer func() { result = GuardHTTPClient(ctx, result) }()
 	httpClient := &http.Client{}
 	if timeout > 0 {
 		httpClient.Timeout = timeout

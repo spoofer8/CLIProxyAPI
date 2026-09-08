@@ -167,6 +167,9 @@ func (r *UsageReporter) trackHTTPClient(client *http.Client, packetOnly bool) *h
 	}
 	tracked := *client
 	transport := tracked.Transport
+	if guarded, ok := transport.(outboundPolicyTransport); ok {
+		transport = guarded.base
+	}
 	if transport == nil {
 		transport = http.DefaultTransport
 	}
@@ -325,6 +328,7 @@ func (r *UsageReporter) TrackFailure(ctx context.Context, errPtr *error) {
 		return
 	}
 	if *errPtr != nil {
+		*errPtr = sdkaccess.NormalizePolicyError(*errPtr)
 		r.PublishFailure(ctx, *errPtr)
 	}
 }
@@ -417,6 +421,7 @@ func failFromErrors(errs ...error) usage.Failure {
 		if err == nil {
 			continue
 		}
+		err = sdkaccess.NormalizePolicyError(err)
 		body := strings.TrimSpace(err.Error())
 		type responseBodyProvider interface {
 			ResponseBody() []byte
@@ -486,6 +491,12 @@ type usageTTFTRoundTripper struct {
 }
 
 func (t usageTTFTRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if errPolicy := authorizeOutboundHTTP(req); errPolicy != nil {
+		if req != nil && req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, errPolicy
+	}
 	cliproxyexecutor.MarkUpstreamAttempt(req.Context())
 	t.reporter.StartResponseTTFT()
 	resp, errRoundTrip := t.base.RoundTrip(req)

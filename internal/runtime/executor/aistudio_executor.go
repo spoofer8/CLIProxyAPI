@@ -99,6 +99,9 @@ func (e *AIStudioExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.A
 		Headers: httpReq.Header.Clone(),
 		Body:    body,
 	}
+	if errPolicy := helps.AuthorizeOutboundRequest(ctx, wsReq.Body, wsReq.URL); errPolicy != nil {
+		return nil, errPolicy
+	}
 	wsResp, errRelay := e.relay.NonStream(ctx, auth.ID, wsReq)
 	if errRelay != nil {
 		return nil, errRelay
@@ -169,6 +172,9 @@ func (e *AIStudioExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth,
 	})
 
 	reporter.StartResponseTTFT()
+	if errPolicy := helps.AuthorizeOutboundRequest(ctx, wsReq.Body, wsReq.URL); errPolicy != nil {
+		return resp, errPolicy
+	}
 	wsResp, err := e.relay.NonStream(ctx, authID, wsReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -239,6 +245,9 @@ func (e *AIStudioExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth
 		AuthValue: authValue,
 	})
 	reporter.StartResponseTTFT()
+	if errPolicy := helps.AuthorizeOutboundRequest(ctx, wsReq.Body, wsReq.URL); errPolicy != nil {
+		return nil, errPolicy
+	}
 	wsStream, err := e.relay.Stream(ctx, authID, wsReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
@@ -418,6 +427,9 @@ func (e *AIStudioExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.A
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
+	if errPolicy := helps.AuthorizeOutboundRequest(ctx, wsReq.Body, wsReq.URL); errPolicy != nil {
+		return cliproxyexecutor.Response{}, errPolicy
+	}
 	resp, err := e.relay.NonStream(ctx, authID, wsReq)
 	if err != nil {
 		helps.RecordAPIResponseError(ctx, e.cfg, err)

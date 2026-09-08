@@ -45,6 +45,7 @@ type usageScope struct {
 	store         *store.Store
 	auth          *authState
 	accountant    *accountant
+	permissions   *permissionCache
 	cfg           config.UserManagementConfig
 	leases        int
 	retired       bool
@@ -99,6 +100,7 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 		oldScope.cfg = cfg
 		ttl, _ := time.ParseDuration(cfg.Cache.TTL) // validated above
 		oldAuth.updateTTL(ttl)
+		oldScope.permissions.updateTTL(ttl)
 		r.mu.Unlock()
 		return nil
 	}
@@ -123,7 +125,8 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
 	scope := &usageScope{
 		id: scopeID, store: replacement, auth: replacementAuth, accountant: newAccountant(replacement), cfg: cfg,
-		idle: make(chan struct{}), done: make(chan struct{}), cleanupCtx: cleanupCtx, cancelCleanup: cancelCleanup,
+		permissions: newPermissionCache(replacement, ttl),
+		idle:        make(chan struct{}), done: make(chan struct{}), cleanupCtx: cleanupCtx, cancelCleanup: cancelCleanup,
 	}
 	r.mu.Lock()
 	if r.scopes == nil {
@@ -225,7 +228,8 @@ func (r *Runtime) shutdown() {
 var ErrDisabled = errors.New("user management is disabled")
 
 // withStore leases the original store without holding the global mutex during
-// database work. Cache invalidation remains attached to that store lifetime.
+// database work. Mutations invalidate every live scope: reload can leave several
+// pools connected to the same database while older producers are still active.
 func (r *Runtime) withStore(mutation bool, operation func(*store.Store) error) error {
 	if r == nil {
 		return ErrDisabled
@@ -241,8 +245,13 @@ func (r *Runtime) withStore(mutation bool, operation func(*store.Store) error) e
 	defer r.releaseScope(scope)
 	errOperation := operation(scope.store)
 	if mutation && errOperation == nil {
-		scope.auth.invalidate()
-		scope.accountant.quota.invalidate()
+		r.mu.RLock()
+		for _, live := range r.scopes {
+			live.auth.invalidate()
+			live.accountant.quota.invalidate()
+			live.permissions.invalidate()
+		}
+		r.mu.RUnlock()
 	}
 	return errOperation
 }

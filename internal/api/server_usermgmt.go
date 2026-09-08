@@ -19,7 +19,7 @@ func userManagementRouteSupported(method, path string) bool {
 		}
 		if strings.HasPrefix(path, "/v1beta/models/") {
 			model := strings.TrimPrefix(path, "/v1beta/models/")
-			return model != "" && !strings.ContainsAny(model, "/:")
+			return model != "" && !strings.Contains(model, ":")
 		}
 	}
 	if method != http.MethodPost {
@@ -33,7 +33,7 @@ func userManagementRouteSupported(method, path string) bool {
 	}
 	if strings.HasPrefix(path, "/v1beta/models/") {
 		model, action, ok := strings.Cut(strings.TrimPrefix(path, "/v1beta/models/"), ":")
-		if !ok || model == "" || strings.Contains(model, "/") {
+		if !ok || model == "" {
 			return false
 		}
 		return action == "generateContent" || action == "streamGenerateContent" || action == "countTokens"
@@ -49,8 +49,10 @@ func (s *Server) userManagementMiddleware() gin.HandlerFunc {
 			return
 		}
 		hooks := sdkaccess.RequestHooks{
-			Begin: s.userManagement.BeginRequest,
-			Check: s.userManagement.CheckRequest,
+			Begin:           s.userManagement.BeginRequest,
+			Check:           s.userManagement.CheckRequest,
+			Authorize:       s.userManagement.CheckPermissions,
+			FilterProviders: s.userManagement.FilterProviders,
 		}
 		c.Request = c.Request.WithContext(sdkaccess.WithRequestHooks(c.Request.Context(), hooks))
 		if errCheck := s.userManagement.CheckRequest(c.Request.Context()); errCheck != nil {

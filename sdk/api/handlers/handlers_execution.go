@@ -9,6 +9,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -49,6 +50,7 @@ func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entr
 	}
 	defer release()
 	originalRequestedModel := modelName
+	ctx = requestPolicyContext(ctx, originalRequestedModel, modelName, execOptions.InternalSource)
 	routeDecision := h.applyModelRouter(ctx, entryProtocol, modelName, rawJSON, false, execOptions)
 	responseProtocol := modelExecutionResponseProtocol(entryProtocol, exitProtocol)
 	if errMsg := validateNativeInteractionsExecution(entryProtocol, execOptions, routeDecision); errMsg != nil {
@@ -62,6 +64,11 @@ func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entr
 		return nil, nil, errMsg
 	}
 	providers = adjustExecutionProvidersForEntryProtocol(entryProtocol, providers)
+	ctx = requestPolicyContext(ctx, originalRequestedModel, normalizedModel, execOptions.InternalSource)
+	providers, errMsg = filterRequestProviders(ctx, providers)
+	if errMsg != nil {
+		return nil, nil, errMsg
+	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
 	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
@@ -125,6 +132,7 @@ func (h *BaseAPIHandler) executeCountWithAuthManager(ctx context.Context, handle
 	}
 	defer release()
 	originalRequestedModel := modelName
+	ctx = requestPolicyContext(ctx, originalRequestedModel, modelName, execOptions.InternalSource)
 	routeDecision := h.applyModelRouter(ctx, handlerType, modelName, rawJSON, false, execOptions)
 	if routeDecision.ExecutorPluginID != "" {
 		return h.countWithPluginExecutor(ctx, handlerType, modelName, originalRequestedModel, rawJSON, alt, routeDecision.ExecutorPluginID, execOptions)
@@ -134,6 +142,11 @@ func (h *BaseAPIHandler) executeCountWithAuthManager(ctx context.Context, handle
 		return nil, nil, errMsg
 	}
 	providers = adjustExecutionProvidersForEntryProtocol(handlerType, providers)
+	ctx = requestPolicyContext(ctx, originalRequestedModel, normalizedModel, execOptions.InternalSource)
+	providers, errMsg = filterRequestProviders(ctx, providers)
+	if errMsg != nil {
+		return nil, nil, errMsg
+	}
 	reqMeta := requestExecutionMetadata(ctx)
 	reqMeta[coreexecutor.RequestedModelMetadataKey] = originalRequestedModel
 	addAuthSelectionModelMetadata(reqMeta, execOptions.AuthSelectionModel)
@@ -204,12 +217,18 @@ func (h *BaseAPIHandler) executeWithPluginExecutor(ctx context.Context, entryPro
 		lifecycle.completeError(execCtx, interceptErr)
 		return nil, nil, interceptErr
 	}
+	execCtx = pluginRequestPolicyContext(execCtx, executorPluginID, req)
+	if policyError := authorizePluginRequest(execCtx, executorPluginID, req); policyError != nil {
+		lifecycle.completeError(execCtx, policyError)
+		return nil, nil, policyError
+	}
 	var reporter *helps.UsageReporter
 	if !execOptions.InternalSource {
 		reporter = helps.NewUsageReporter(execCtx, executorPluginID, modelName, nil)
 		reporter.SetTranslatedReasoningEffort(req.Payload, entryProtocol)
 	}
 	resp, errExecute := host.ExecutePluginExecutor(execCtx, executorPluginID, req, opts)
+	errExecute = sdkaccess.NormalizePolicyError(errExecute)
 	if errExecute != nil {
 		if reporter != nil && !nestedTracker.hasNestedExecution() {
 			reporter.PublishFailure(execCtx, errExecute)
@@ -251,7 +270,13 @@ func (h *BaseAPIHandler) countWithPluginExecutor(ctx context.Context, handlerTyp
 		lifecycle.completeError(ctx, interceptErr)
 		return nil, nil, interceptErr
 	}
+	ctx = pluginRequestPolicyContext(ctx, executorPluginID, req)
+	if policyError := authorizePluginRequest(ctx, executorPluginID, req); policyError != nil {
+		lifecycle.completeError(ctx, policyError)
+		return nil, nil, policyError
+	}
 	resp, errCount := host.CountPluginExecutor(ctx, executorPluginID, req, opts)
+	errCount = sdkaccess.NormalizePolicyError(errCount)
 	if errCount != nil {
 		errMsg := executionErrorMessage(errCount)
 		lifecycle.completeError(ctx, errMsg)
@@ -327,6 +352,7 @@ func ExecutionErrorMessage(err error) *interfaces.ErrorMessage {
 }
 
 func executionErrorMessage(err error) *interfaces.ErrorMessage {
+	err = sdkaccess.NormalizePolicyError(err)
 	var terminated *coreexecutor.RequestTerminatedError
 	if errors.As(err, &terminated) && terminated != nil {
 		return &interfaces.ErrorMessage{

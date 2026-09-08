@@ -322,6 +322,17 @@ func (m *Manager) preparedExecutionModelsWithAlias(auth *Auth, routeModel string
 }
 
 func (m *Manager) executionModelCandidatesWithAlias(auth *Auth, routeModel string) ([]string, bool, OAuthModelAliasResult, *apiKeyModelRoutingSnapshot) {
+	return m.executionModelCandidatesWithAliasOrder(auth, routeModel, true)
+}
+
+// PreviewExecutionModels resolves every configured upstream target without
+// advancing round-robin state. Model catalogs use it to honor deployment denies.
+func (m *Manager) PreviewExecutionModels(auth *Auth, routeModel string) []string {
+	models, _, _, _ := m.executionModelCandidatesWithAliasOrder(auth, routeModel, false)
+	return append([]string(nil), models...)
+}
+
+func (m *Manager) executionModelCandidatesWithAliasOrder(auth *Auth, routeModel string, rotate bool) ([]string, bool, OAuthModelAliasResult, *apiKeyModelRoutingSnapshot) {
 	routing := m.loadAPIKeyModelRouting()
 	requestedModel := rewriteModelForAuth(routeModel, auth)
 	aliasResult := m.resolveExecutionAliasResultForRequestedWithRouting(routing, auth, requestedModel)
@@ -338,7 +349,7 @@ func (m *Manager) executionModelCandidatesWithAlias(auth *Auth, routeModel strin
 	}
 	if len(candidates) == 0 {
 		if pool := resolveOpenAICompatUpstreamModelPool(routing.config, auth, upstreamModel); len(pool) > 0 {
-			if len(pool) == 1 {
+			if len(pool) == 1 || !rotate {
 				candidates = pool
 			} else {
 				offset := m.nextModelPoolOffset(openAICompatModelPoolKey(auth, upstreamModel), len(pool))

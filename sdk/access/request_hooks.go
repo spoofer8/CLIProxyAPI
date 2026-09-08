@@ -5,8 +5,41 @@ import "context"
 // RequestHooks carries service-local admission and lifetime callbacks. It is
 // attached only to authenticated user requests; legacy callers have no hooks.
 type RequestHooks struct {
-	Check func(context.Context) error
-	Begin func(context.Context) (func(), error)
+	Check           func(context.Context) error
+	Begin           func(context.Context) (func(), error)
+	Authorize       func(context.Context, PolicyTarget) error
+	FilterProviders func(context.Context, string, string, []string) ([]string, error)
+}
+
+// PolicyTarget distinguishes client-visible model names from names rewritten
+// for the selected upstream. Provider identifies the actual selected provider.
+type PolicyTarget struct {
+	RequestedModel string
+	ResolvedModel  string
+	ExecutionModel string
+	PayloadModel   string
+	Provider       string
+	// DenyModels preserves intermediate nested names without granting allows.
+	DenyModels []string
+}
+
+type policyTargetContextKey struct{}
+
+func WithPolicyTarget(ctx context.Context, target PolicyTarget) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target.DenyModels = append([]string(nil), target.DenyModels...)
+	return context.WithValue(ctx, policyTargetContextKey{}, target)
+}
+
+func PolicyTargetFromContext(ctx context.Context) (PolicyTarget, bool) {
+	if ctx == nil {
+		return PolicyTarget{}, false
+	}
+	target, ok := ctx.Value(policyTargetContextKey{}).(PolicyTarget)
+	target.DenyModels = append([]string(nil), target.DenyModels...)
+	return target, ok
 }
 
 type requestHooksContextKey struct{}

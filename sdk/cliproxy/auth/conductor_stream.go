@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
@@ -132,6 +133,10 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 			rewriter = NewStreamRewriter(StreamRewriteOptions{RewriteModel: aliasResult.OriginalAlias})
 		}
 		emit := func(chunk cliproxyexecutor.StreamChunk) bool {
+			if sdkaccess.IsPolicyError(chunk.Err) {
+				chunk.Err = sdkaccess.NormalizePolicyError(chunk.Err)
+				failed = true
+			}
 			if chunk.Err != nil && !failed {
 				failed = true
 				entry := logEntryWithRequestID(ctx)
@@ -234,6 +239,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		entry := logEntryWithRequestID(ctx)
 		startStream := time.Now()
 		streamResult, errStream := executeStreamWithUsageLease(ctx, executor, auth, execReq, execOpts)
+		if sdkaccess.IsPolicyError(errStream) {
+			return nil, errStream
+		}
 		errStream = markUpstreamExecutionAttemptFromContext(ctx, errStream)
 		if hasUpstreamExecutionAttempt(errStream) {
 			upstreamErr = errStream
@@ -253,6 +261,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					ctx = newUpstreamAttemptContext(ctx)
 					startRetry := time.Now()
 					streamResult, errStream = executeStreamWithUsageLease(ctx, executor, auth, execReq, execOpts)
+					if sdkaccess.IsPolicyError(errStream) {
+						return nil, errStream
+					}
 					errStream = markUpstreamExecutionAttemptFromContext(ctx, errStream)
 					if hasUpstreamExecutionAttempt(errStream) {
 						upstreamErr = errStream
@@ -309,6 +320,10 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		}
 
 		buffered, closed, bootstrapErr := readStreamBootstrap(ctx, streamResult.Chunks)
+		if sdkaccess.IsPolicyError(bootstrapErr) {
+			discardStreamChunks(streamResult.Chunks)
+			return nil, sdkaccess.NormalizePolicyError(bootstrapErr)
+		}
 		bootstrapErr = markUpstreamExecutionAttemptFromContext(ctx, bootstrapErr)
 		if hasUpstreamExecutionAttempt(bootstrapErr) {
 			upstreamErr = newStreamBootstrapError(bootstrapErr, streamResult.Headers)
@@ -329,6 +344,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					ctx = newUpstreamAttemptContext(ctx)
 					startRetry := time.Now()
 					retryStream, retryErr := executeStreamWithUsageLease(ctx, executor, auth, execReq, execOpts)
+					if sdkaccess.IsPolicyError(retryErr) {
+						return nil, retryErr
+					}
 					retryErr = markUpstreamExecutionAttemptFromContext(ctx, retryErr)
 					retryStream, retryErr = validateStreamResult(retryStream, retryErr)
 					retryErr = markUpstreamExecutionAttemptFromContext(ctx, retryErr)
@@ -342,6 +360,10 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					} else {
 						streamResult = retryStream
 						buffered, closed, bootstrapErr = readStreamBootstrap(ctx, streamResult.Chunks)
+						if sdkaccess.IsPolicyError(bootstrapErr) {
+							discardStreamChunks(streamResult.Chunks)
+							return nil, sdkaccess.NormalizePolicyError(bootstrapErr)
+						}
 						bootstrapErr = markUpstreamExecutionAttemptFromContext(ctx, bootstrapErr)
 						if bootstrapErr != nil {
 							warnLogUpstreamFailure(ctx, entry, provider, execModel, auth, time.Since(startRetry), bootstrapErr)
