@@ -212,6 +212,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	applySignatureCacheConfig(nil, cfg)
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
+	s.mgmt.SetUserManagement(s.userManagement)
+	if s.userManagement != nil {
+		s.userManagement.SetManagementLoginGuard(s.mgmt)
+	}
 	s.mgmt.SetPluginHost(optionState.pluginHost)
 	s.mgmt.SetConfigReloadHook(optionState.configReloadHook)
 	if optionState.localPassword != "" {
@@ -231,9 +235,11 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// subscribe-config heartbeat connection is healthy.
 	engine.Use(s.homeHeartbeatMiddleware())
 	engine.Use(s.exampleAPIKeySafeModeMiddleware())
+	engine.Use(s.userManagementAuditMiddleware())
 
 	// Setup routes
 	s.setupRoutes()
+	s.registerUserManagementAuthRoutes()
 
 	// Apply additional router configurators from options
 	if optionState.routerConfigurator != nil {
@@ -243,8 +249,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Register management routes when configuration or environment secrets are available,
 	// or when a local management password is provided (e.g. TUI mode).
 	hasManagementSecret := cfg.RemoteManagement.SecretKey != "" || envManagementSecret || s.localPassword != ""
-	s.managementRoutesEnabled.Store(hasManagementSecret)
-	redisqueue.SetEnabled(hasManagementSecret || (cfg != nil && cfg.Home.Enabled))
+	s.managementRoutesEnabled.Store(hasManagementSecret || s.userManagementActive())
+	redisqueue.SetEnabled(s.managementRoutesEnabled.Load() || (cfg != nil && cfg.Home.Enabled))
 	if hasManagementSecret || s.userManagement != nil {
 		s.registerManagementRoutes()
 	}

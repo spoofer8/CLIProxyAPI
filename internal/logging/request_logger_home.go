@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 )
 
 type homeRequestLogClient interface {
@@ -40,6 +41,9 @@ func cloneHeaders(headers map[string][]string) map[string][]string {
 		}
 		copied := make([]string, len(values))
 		copy(copied, values)
+		for i, value := range copied {
+			copied[i] = util.RedactCookieHeaderValue(key, value)
+		}
 		out[key] = copied
 	}
 	if len(out) == 0 {

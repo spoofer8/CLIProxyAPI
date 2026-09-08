@@ -319,5 +319,15 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 		}
 	}
 
+	if s.userManagementActive() {
+		html, err := os.ReadFile(filePath)
+		if err != nil {
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", injectManagementSessionBridge(html, s.panelSessionAuthenticated(c)))
+		return
+	}
 	c.File(filePath)
 }

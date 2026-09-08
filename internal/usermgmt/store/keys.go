@@ -26,7 +26,7 @@ func scanKey(row rowScanner) (APIKey, error) {
 }
 
 func (s *Store) CreateKey(ctx context.Context, key APIKey, hash string) (APIKey, error) {
-	return scanKey(s.db.QueryRowContext(ctx, `INSERT INTO cpa_user_api_keys
+	return scanKey(s.query().QueryRowContext(ctx, `INSERT INTO cpa_user_api_keys
 		(id,user_id,key_hash,key_prefix,label) VALUES ($1,$2,$3,$4,$5) RETURNING `+keyColumns,
 		key.ID, key.UserID, hash, key.KeyPrefix, key.Label))
 }
@@ -36,10 +36,10 @@ func (s *Store) ListKeys(ctx context.Context, userID string, limit, offset int) 
 		return nil, 0, errUser
 	}
 	var total int64
-	if errCount := s.db.QueryRowContext(ctx, `SELECT count(*) FROM cpa_user_api_keys WHERE user_id=$1`, userID).Scan(&total); errCount != nil {
+	if errCount := s.query().QueryRowContext(ctx, `SELECT count(*) FROM cpa_user_api_keys WHERE user_id=$1`, userID).Scan(&total); errCount != nil {
 		return nil, 0, domainError("count API keys", errCount)
 	}
-	rows, errQuery := s.db.QueryContext(ctx, `SELECT `+keyColumns+` FROM cpa_user_api_keys WHERE user_id=$1 ORDER BY id LIMIT $2 OFFSET $3`, userID, limit, offset)
+	rows, errQuery := s.query().QueryContext(ctx, `SELECT `+keyColumns+` FROM cpa_user_api_keys WHERE user_id=$1 ORDER BY id LIMIT $2 OFFSET $3`, userID, limit, offset)
 	if errQuery != nil {
 		return nil, 0, domainError("list API keys", errQuery)
 	}
@@ -56,7 +56,7 @@ func (s *Store) ListKeys(ctx context.Context, userID string, limit, offset int) 
 }
 
 func (s *Store) RevokeKey(ctx context.Context, id string) (APIKey, error) {
-	return scanKey(s.db.QueryRowContext(ctx, `UPDATE cpa_user_api_keys
+	return scanKey(s.query().QueryRowContext(ctx, `UPDATE cpa_user_api_keys
 		SET status='revoked', revoked_at=COALESCE(revoked_at,now()) WHERE id=$1 RETURNING `+keyColumns, id))
 }
 
@@ -70,7 +70,7 @@ type KeyIdentity struct {
 
 func (s *Store) LookupActiveKey(ctx context.Context, hash string) (KeyIdentity, error) {
 	var identity KeyIdentity
-	errQuery := s.db.QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id
+	errQuery := s.query().QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id
 		FROM cpa_user_api_keys k JOIN cpa_users u ON u.id=k.user_id
 		WHERE k.key_hash=$1 AND k.status='active' AND k.revoked_at IS NULL AND u.status='active'`, hash).
 		Scan(&identity.UserID, &identity.Email, &identity.Role, &identity.KeyID)
@@ -82,7 +82,7 @@ func (s *Store) LookupActiveKey(ctx context.Context, hash string) (KeyIdentity, 
 // must still match, including for subsequent frames on an existing WebSocket.
 func (s *Store) LookupActiveKeyIdentity(ctx context.Context, userID, keyID string) (KeyIdentity, error) {
 	var identity KeyIdentity
-	errQuery := s.db.QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id
+	errQuery := s.query().QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id
 		FROM cpa_user_api_keys k JOIN cpa_users u ON u.id=k.user_id
 		WHERE u.id=$1 AND k.id=$2 AND k.status='active' AND k.revoked_at IS NULL AND u.status='active'`, userID, keyID).
 		Scan(&identity.UserID, &identity.Email, &identity.Role, &identity.KeyID)
@@ -100,7 +100,7 @@ func (s *Store) TouchKeys(ctx context.Context, lastUsed map[string]time.Time) er
 		ids = append(ids, id)
 		timestamps = append(timestamps, at)
 	}
-	_, errUpdate := s.db.ExecContext(ctx, `UPDATE cpa_user_api_keys AS k
+	_, errUpdate := s.query().ExecContext(ctx, `UPDATE cpa_user_api_keys AS k
 		SET last_used_at=GREATEST(k.last_used_at,b.at)
 		FROM unnest($1::TEXT[],$2::TIMESTAMPTZ[]) AS b(id,at) WHERE k.id=b.id`, ids, timestamps)
 	return domainError("update API key last used", errUpdate)

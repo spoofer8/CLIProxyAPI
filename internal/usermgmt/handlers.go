@@ -51,6 +51,8 @@ func (r *Runtime) RegisterManagementRoutes(group *gin.RouterGroup) {
 	group.GET("/usage", r.listUsage)
 	group.GET("/users/:id/permissions", r.getPermissions)
 	group.PUT("/users/:id/permissions", r.replacePermissions)
+	group.POST("/users/:id/password", r.setPassword)
+	group.GET("/audit", r.listAudit)
 }
 
 func newID() (string, error) {
@@ -183,7 +185,7 @@ func (r *Runtime) createUser(c *gin.Context) {
 		return
 	}
 	var user store.User
-	errCreate := r.withStore(true, func(db *store.Store) error {
+	errCreate := r.mutate(c.Request.Context(), AuditEvent{Action: "user.create", Target: id}, func(db *store.Store) error {
 		var errStore error
 		user, errStore = db.CreateUser(c.Request.Context(), store.User{
 			ID: id, Email: input.Email, DisplayName: input.DisplayName, Role: input.Role,
@@ -285,7 +287,27 @@ func (r *Runtime) updateUser(c *gin.Context) {
 		return
 	}
 	var user store.User
-	errUpdate := r.withStore(true, func(db *store.Store) error {
+	action := "user.update"
+	fields := make([]string, 0, 4)
+	if patch.DisplayName != nil {
+		fields = append(fields, "display_name")
+	}
+	if patch.Role != nil {
+		fields = append(fields, "role")
+	}
+	if patch.Status != nil {
+		fields = append(fields, "status")
+		if *patch.Status == "disabled" {
+			action = "user.disable"
+		}
+	}
+	if patch.MonthlyTokenLimitSet {
+		fields = append(fields, "monthly_token_limit")
+		if len(fields) == 1 {
+			action = "quota.update"
+		}
+	}
+	errUpdate := r.mutate(c.Request.Context(), AuditEvent{Action: action, Target: id, Detail: map[string]any{"fields": fields}}, func(db *store.Store) error {
 		var errStore error
 		user, errStore = db.UpdateUser(c.Request.Context(), id, patch)
 		return errStore
@@ -302,7 +324,7 @@ func (r *Runtime) deleteUser(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if errDelete := r.withStore(true, func(db *store.Store) error {
+	if errDelete := r.mutate(c.Request.Context(), AuditEvent{Action: "user.delete", Target: id}, func(db *store.Store) error {
 		return db.DeleteUser(c.Request.Context(), id)
 	}); errDelete != nil {
 		respondError(c, errDelete)
@@ -340,7 +362,7 @@ func (r *Runtime) createKey(c *gin.Context) {
 	plaintext := "sk-cpa-" + base64.RawURLEncoding.EncodeToString(random)
 	digest := sha256.Sum256([]byte(plaintext))
 	var key store.APIKey
-	errCreate := r.withStore(true, func(db *store.Store) error {
+	errCreate := r.mutate(c.Request.Context(), AuditEvent{Action: "key.create", Target: id, Detail: map[string]any{"key_prefix": plaintext[:15]}}, func(db *store.Store) error {
 		var errStore error
 		key, errStore = db.CreateKey(c.Request.Context(), store.APIKey{
 			ID: id, UserID: userID, KeyPrefix: plaintext[:15], Label: input.Label,
@@ -382,7 +404,7 @@ func (r *Runtime) revokeKey(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if errRevoke := r.withStore(true, func(db *store.Store) error {
+	if errRevoke := r.mutate(c.Request.Context(), AuditEvent{Action: "key.revoke", Target: id}, func(db *store.Store) error {
 		_, errStore := db.RevokeKey(c.Request.Context(), id)
 		return errStore
 	}); errRevoke != nil {

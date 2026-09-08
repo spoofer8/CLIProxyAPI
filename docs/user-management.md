@@ -12,7 +12,7 @@ management secret.
 | 1 | Users, hashed API keys, management API, usage identity | Implemented |
 | 2 | Monthly token accounting and quota rejection | Implemented |
 | 3 | Model/provider permissions and filtered model listings | Implemented |
-| 4 | Named administrator login, sessions and audit events | Planned |
+| 4 | Named administrator login, sessions and audit events | Implemented |
 
 Phase 0 creates the tables needed by later phases. Their presence does not mean
 that quota enforcement, permissions, login, or audit recording are active.
@@ -482,12 +482,104 @@ metadata race and an intermittent Antigravity pooled-connection count failure.
 Those unrelated baseline issues were not changed by this feature; the passing
 checks above do not constitute a clean repository-wide race-test result.
 
-## Named login and audit — Phase 4, planned
+## Named login and audit — Phase 4
 
-Phase 4 will add administrator email/password login, revocable sessions, and
-audit events. The upstream management panel currently has its own shared-key
-login; accepting a cookie in middleware alone cannot replace that client flow.
-The integration must bridge its login state and revoke the server session on
-logout while preserving the existing management secret as a recovery path.
-Until that phase is implemented, the existing management authentication remains
-the only supported panel login.
+Named panel login requires an active user with `role: admin` and a password.
+No default administrator or email is chosen automatically. Acceptance uses
+temporary accounts and removes them; create the first permanent administrator
+with your chosen email through the existing management API:
+
+```text
+POST /v0/management/users
+Content-Type: application/json
+
+{"email":"your-admin@example.invalid","display_name":"Administrator","role":"admin"}
+```
+
+Authenticate that request with the existing management secret, using the
+private curl configuration described above. Use the returned user ID to set
+the administrator's password:
+
+```text
+POST /v0/management/users/:id/password
+Content-Type: application/json
+
+{"password":"<new administrator password>"}
+```
+
+Passwords must contain 8–72 bytes and are stored with bcrypt. The response is
+`{"status":"ok"}`. Send `{"password":null}` or an empty string to clear a
+password; an omitted password is invalid. Only administrators may have a
+nonempty panel password. Password, role, and account-status changes revoke
+existing sessions; clearing a password also disables password login.
+
+Visit `/login` and enter the administrator's email/password. The form redirects
+to `/management.html` after successful login. JSON clients can instead use:
+
+```text
+POST /v0/management/login
+Content-Type: application/json
+
+{"email":"example@example.invalid","password":"<administrator password>"}
+```
+
+The JSON response contains `status`, `user` (`user_id`, `email`, `display_name`,
+`role`, `expires_at`), and `redirect`. The session is issued in the `cpa_session`
+cookie with `HttpOnly`, `SameSite=Strict`, and `Path=/`. Sessions expire after
+the configured absolute TTL, normally 12 hours; the database stores the
+cookie's hash. The current plain-HTTP deployment does not set `Secure`.
+
+The downloaded panel remains unchanged on disk. A server-side response bridge
+initializes its login state using the public marker `cpa-session`; that marker
+is not a credential and cannot authenticate without a valid administrator
+cookie. Both the panel's normal Logout action and its account Sign out control
+call `POST /v0/management/logout` to revoke the server session. If logout fails,
+the control displays a retryable error rather than claiming success.
+
+Cookie-authenticated writes and login/logout submissions require the same
+origin. Remote access still respects the existing remote-management setting.
+An explicit valid legacy management key takes precedence over cookies, keeping
+the recovery path independent of the session database even if a stale cookie
+is present. Expired/revoked cookies with the public marker return 401 without
+consuming the bad-password budget. Use `/management.html?legacy=1` to switch
+the browser back to the panel's existing shared-key login.
+
+Named sessions also work when user management is enabled and no shared
+management secret remains, provided an administrator account was already
+provisioned. Keep the existing secret until that recovery choice is deliberate.
+Password login and legacy-key failures share the existing per-IP protection:
+five failures trigger a 30-minute ban. Test this behavior only against an
+isolated instance, not the production administrator's IP.
+
+### Audit API
+
+```text
+GET /v0/management/audit?limit=50&before=<event-id>&actor=<actor-id>&action=<action>
+```
+
+The response is `{"events":[...],"next_before":...}`; each event contains `id`,
+`at`, `actor`, `action`, `target`, `client_ip`, and `detail`. Results are newest
+first; the limit defaults to 50 and is capped at 200. Pass `next_before` as
+`before` to page backward. The actor is the named administrator's user ID or
+`legacy-admin-key` for explicit legacy authentication.
+
+Events cover user create/update/disable/delete, key create/revoke, quota changes,
+permission replacement, password changes, login/logout/login failures, and
+invalid proxy keys. A nonempty permission replacement records
+`permission.grant`; an explicit empty replacement records `permission.revoke`.
+A limit-only account PATCH records `quota.update`. Password changes record
+`password.update` with a `cleared` flag. Audit details contain fixed metadata
+such as counts and display prefixes, never passwords, password/key hashes,
+session cookies, or full request bodies. Invalid-key events are rate-limited.
+
+User-management mutations and their audit event commit together. Deleting an
+account does not delete its audit history. Request logging excludes sensitive
+management bodies, and Cookie/Set-Cookie headers are redacted by the shared
+logging helper.
+
+Phase 4 validation passed the full Linux suite, planned PostgreSQL/race and
+build checks, plus 30 fresh-browser checks against the unchanged upstream
+panel and 32 isolated API/database checks. Those checks covered real form
+login, normal panel logout and server revocation, audit actor/IP attribution,
+stale-session recovery, named login without a shared secret, and the failure
+ban on an isolated instance. Temporary fixtures were removed afterward.

@@ -65,21 +65,21 @@ func domainError(operation string, err error) error {
 }
 
 func (s *Store) CreateUser(ctx context.Context, user User) (User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `INSERT INTO cpa_users
+	return scanUser(s.query().QueryRowContext(ctx, `INSERT INTO cpa_users
 		(id, email, display_name, role, status, monthly_token_limit) VALUES ($1,$2,$3,$4,$5,$6)
 		RETURNING `+userColumns, user.ID, user.Email, user.DisplayName, user.Role, user.Status, user.MonthlyTokenLimit))
 }
 
 func (s *Store) GetUser(ctx context.Context, id string) (User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userColumns+` FROM cpa_users WHERE id=$1`, id))
+	return scanUser(s.query().QueryRowContext(ctx, `SELECT `+userColumns+` FROM cpa_users WHERE id=$1`, id))
 }
 
 func (s *Store) ListUsers(ctx context.Context, limit, offset int) ([]User, int64, error) {
 	var total int64
-	if errCount := s.db.QueryRowContext(ctx, `SELECT count(*) FROM cpa_users`).Scan(&total); errCount != nil {
+	if errCount := s.query().QueryRowContext(ctx, `SELECT count(*) FROM cpa_users`).Scan(&total); errCount != nil {
 		return nil, 0, domainError("count users", errCount)
 	}
-	rows, errQuery := s.db.QueryContext(ctx, `SELECT `+userColumns+` FROM cpa_users ORDER BY id LIMIT $1 OFFSET $2`, limit, offset)
+	rows, errQuery := s.query().QueryContext(ctx, `SELECT `+userColumns+` FROM cpa_users ORDER BY id LIMIT $1 OFFSET $2`, limit, offset)
 	if errQuery != nil {
 		return nil, 0, domainError("list users", errQuery)
 	}
@@ -96,15 +96,27 @@ func (s *Store) ListUsers(ctx context.Context, limit, offset int) ([]User, int64
 }
 
 func (s *Store) UpdateUser(ctx context.Context, id string, patch UserPatch) (User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `UPDATE cpa_users SET
+	var updated User
+	errUpdate := s.Transaction(ctx, func(txStore *Store) error {
+		var errScan error
+		updated, errScan = scanUser(txStore.query().QueryRowContext(ctx, `UPDATE cpa_users SET
 		display_name=COALESCE($2,display_name), role=COALESCE($3,role), status=COALESCE($4,status),
 		monthly_token_limit=CASE WHEN $5 THEN $6::BIGINT ELSE monthly_token_limit END,
 		updated_at=now() WHERE id=$1 RETURNING `+userColumns,
-		id, patch.DisplayName, patch.Role, patch.Status, patch.MonthlyTokenLimitSet, patch.MonthlyTokenLimit))
+			id, patch.DisplayName, patch.Role, patch.Status, patch.MonthlyTokenLimitSet, patch.MonthlyTokenLimit))
+		if errScan != nil {
+			return errScan
+		}
+		if (patch.Role != nil || patch.Status != nil) && (updated.Role != "admin" || updated.Status != "active") {
+			return txStore.RevokeUserSessions(ctx, id)
+		}
+		return nil
+	})
+	return updated, errUpdate
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id string) error {
-	result, errDelete := s.db.ExecContext(ctx, `DELETE FROM cpa_users WHERE id=$1`, id)
+	result, errDelete := s.query().ExecContext(ctx, `DELETE FROM cpa_users WHERE id=$1`, id)
 	if errDelete != nil {
 		return domainError("delete user", errDelete)
 	}

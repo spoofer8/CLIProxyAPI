@@ -14,7 +14,7 @@ func (s *Store) ListPermissions(ctx context.Context, userID string) ([]Permissio
 	if _, errUser := s.GetUser(ctx, userID); errUser != nil {
 		return nil, errUser
 	}
-	rows, errQuery := s.db.QueryContext(ctx, `SELECT scope,value,effect FROM cpa_user_permissions WHERE user_id=$1 ORDER BY scope,value`, userID)
+	rows, errQuery := s.query().QueryContext(ctx, `SELECT scope,value,effect FROM cpa_user_permissions WHERE user_id=$1 ORDER BY scope,value`, userID)
 	if errQuery != nil {
 		return nil, domainError("list permissions", errQuery)
 	}
@@ -33,22 +33,20 @@ func (s *Store) ListPermissions(ctx context.Context, userID string) ([]Permissio
 // ReplacePermissions serializes replacements on the user row. Readers see the
 // complete old or new set, and insertion failures roll the deletion back.
 func (s *Store) ReplacePermissions(ctx context.Context, userID string, permissions []Permission) error {
-	tx, errBegin := s.db.BeginTx(ctx, nil)
-	if errBegin != nil {
-		return domainError("begin permission replacement", errBegin)
-	}
-	defer func() { _ = tx.Rollback() }()
-	var foundID string
-	if errUser := tx.QueryRowContext(ctx, `SELECT id FROM cpa_users WHERE id=$1 FOR UPDATE`, userID).Scan(&foundID); errUser != nil {
-		return domainError("find permission user", errUser)
-	}
-	if _, errDelete := tx.ExecContext(ctx, `DELETE FROM cpa_user_permissions WHERE user_id=$1`, userID); errDelete != nil {
-		return domainError("replace permissions", errDelete)
-	}
-	for _, permission := range permissions {
-		if _, errInsert := tx.ExecContext(ctx, `INSERT INTO cpa_user_permissions (user_id,scope,value,effect) VALUES ($1,$2,$3,$4)`, userID, permission.Scope, permission.Value, permission.Effect); errInsert != nil {
-			return domainError("write permission", errInsert)
+	return s.Transaction(ctx, func(txStore *Store) error {
+		tx := txStore.query()
+		var foundID string
+		if errUser := tx.QueryRowContext(ctx, `SELECT id FROM cpa_users WHERE id=$1 FOR UPDATE`, userID).Scan(&foundID); errUser != nil {
+			return domainError("find permission user", errUser)
 		}
-	}
-	return domainError("commit permission replacement", tx.Commit())
+		if _, errDelete := tx.ExecContext(ctx, `DELETE FROM cpa_user_permissions WHERE user_id=$1`, userID); errDelete != nil {
+			return domainError("replace permissions", errDelete)
+		}
+		for _, permission := range permissions {
+			if _, errInsert := tx.ExecContext(ctx, `INSERT INTO cpa_user_permissions (user_id,scope,value,effect) VALUES ($1,$2,$3,$4)`, userID, permission.Scope, permission.Value, permission.Effect); errInsert != nil {
+				return domainError("write permission", errInsert)
+			}
+		}
+		return nil
+	})
 }

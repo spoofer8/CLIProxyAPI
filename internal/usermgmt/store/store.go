@@ -17,6 +17,37 @@ type Config struct {
 
 type Store struct {
 	db *sql.DB
+	tx *sql.Tx
+}
+
+type queryExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) query() queryExecutor {
+	if s.tx != nil {
+		return s.tx
+	}
+	return s.db
+}
+
+// Transaction reuses an enclosing domain transaction, so compound operations
+// and their audit record commit together without opening nested transactions.
+func (s *Store) Transaction(ctx context.Context, operation func(*Store) error) error {
+	if s.tx != nil {
+		return operation(s)
+	}
+	tx, errBegin := s.db.BeginTx(ctx, nil)
+	if errBegin != nil {
+		return domainError("begin domain transaction", errBegin)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if errOperation := operation(&Store{db: s.db, tx: tx}); errOperation != nil {
+		return errOperation
+	}
+	return domainError("commit domain transaction", tx.Commit())
 }
 
 // Open connects to PostgreSQL and atomically creates the six domain tables.

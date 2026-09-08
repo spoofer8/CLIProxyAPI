@@ -45,7 +45,11 @@ func (r *Runtime) replacePermissions(c *gin.Context) {
 		badRequest(c, errNormalize.Error())
 		return
 	}
-	errReplace := r.withStore(true, func(db *store.Store) error {
+	action := "permission.grant"
+	if len(permissions) == 0 {
+		action = "permission.revoke"
+	}
+	errReplace := r.mutate(c.Request.Context(), AuditEvent{Action: action, Target: userID, Detail: map[string]any{"replacement": true, "rule_count": len(permissions)}}, func(db *store.Store) error {
 		return db.ReplacePermissions(c.Request.Context(), userID, permissions)
 	})
 	if errReplace != nil {

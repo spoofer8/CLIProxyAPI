@@ -40,7 +40,7 @@ func (s *Store) IncrementUsage(ctx context.Context, delta UsageIncrement) error 
 	if _, errPeriod := time.Parse("2006-01", delta.Period); errPeriod != nil {
 		return ErrInvalidUsage
 	}
-	result, errWrite := s.db.ExecContext(ctx, `INSERT INTO cpa_usage_monthly
+	result, errWrite := s.query().ExecContext(ctx, `INSERT INTO cpa_usage_monthly
 		(user_id,period,input_tokens,output_tokens,total_tokens,request_count)
 		VALUES ($1,$2,$3,$4,$5,1)
 		ON CONFLICT (user_id,period) DO UPDATE SET
@@ -74,16 +74,16 @@ func scanMonthlyUsage(row rowScanner) (MonthlyUsage, error) {
 }
 
 func (s *Store) GetMonthlyUsage(ctx context.Context, userID, period string) (MonthlyUsage, error) {
-	return scanMonthlyUsage(s.db.QueryRowContext(ctx, `SELECT `+monthlyUsageColumns+`
+	return scanMonthlyUsage(s.query().QueryRowContext(ctx, `SELECT `+monthlyUsageColumns+`
 		FROM cpa_users u LEFT JOIN cpa_usage_monthly m ON m.user_id=u.id AND m.period=$1 WHERE u.id=$2`, period, userID))
 }
 
 func (s *Store) ListMonthlyUsage(ctx context.Context, period string, limit, offset int) ([]MonthlyUsage, int64, error) {
 	var total int64
-	if errCount := s.db.QueryRowContext(ctx, `SELECT count(*) FROM cpa_users`).Scan(&total); errCount != nil {
+	if errCount := s.query().QueryRowContext(ctx, `SELECT count(*) FROM cpa_users`).Scan(&total); errCount != nil {
 		return nil, 0, domainError("count monthly usage users", errCount)
 	}
-	rows, errQuery := s.db.QueryContext(ctx, `SELECT `+monthlyUsageColumns+`
+	rows, errQuery := s.query().QueryContext(ctx, `SELECT `+monthlyUsageColumns+`
 		FROM cpa_users u LEFT JOIN cpa_usage_monthly m ON m.user_id=u.id AND m.period=$1
 		ORDER BY u.id LIMIT $2 OFFSET $3`, period, limit, offset)
 	if errQuery != nil {

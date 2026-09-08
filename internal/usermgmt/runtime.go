@@ -36,6 +36,9 @@ type Runtime struct {
 	shutdownDone   chan struct{}
 	abortShutdown  chan struct{}
 	abortOnce      sync.Once
+	invalidKeys    invalidKeyLimiter
+	loginGuardMu   sync.RWMutex
+	loginGuard     ManagementLoginGuard
 }
 
 const UsageScopeMetadataKey = "usermgmt_scope"
@@ -46,6 +49,7 @@ type usageScope struct {
 	auth          *authState
 	accountant    *accountant
 	permissions   *permissionCache
+	audit         *auditWriter
 	cfg           config.UserManagementConfig
 	leases        int
 	retired       bool
@@ -126,6 +130,7 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 	scope := &usageScope{
 		id: scopeID, store: replacement, auth: replacementAuth, accountant: newAccountant(replacement), cfg: cfg,
 		permissions: newPermissionCache(replacement, ttl),
+		audit:       newAuditWriter(replacement),
 		idle:        make(chan struct{}), done: make(chan struct{}), cleanupCtx: cleanupCtx, cancelCleanup: cancelCleanup,
 	}
 	r.mu.Lock()
@@ -378,6 +383,9 @@ func (r *Runtime) finishRetirement(scope *usageScope) {
 	}
 	if errClose := scope.accountant.close(cleanupCtx); errClose != nil {
 		log.WithError(errClose).Warn("user management accounting drain did not complete")
+	}
+	if errClose := scope.audit.close(cleanupCtx); errClose != nil {
+		log.WithError(errClose).Warn("user management audit drain did not complete")
 	}
 	scope.auth.close()
 	if errClose := scope.store.Close(); errClose != nil {

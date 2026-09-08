@@ -222,6 +222,8 @@ func MaskAuthorizationHeader(value string) string {
 func MaskSensitiveHeaderValue(key, value string) string {
 	lowerKey := strings.ToLower(strings.TrimSpace(key))
 	switch {
+	case lowerKey == "cookie", lowerKey == "set-cookie":
+		return "[REDACTED]"
 	case strings.Contains(lowerKey, "authorization"):
 		return MaskAuthorizationHeader(value)
 	case strings.Contains(lowerKey, "api-key"),
@@ -232,6 +234,15 @@ func MaskSensitiveHeaderValue(key, value string) string {
 	default:
 		return value
 	}
+}
+
+// RedactCookieHeaderValue is used for response/structured log headers whose
+// other existing values should remain unchanged.
+func RedactCookieHeaderValue(key, value string) string {
+	if strings.EqualFold(strings.TrimSpace(key), "Cookie") || strings.EqualFold(strings.TrimSpace(key), "Set-Cookie") {
+		return "[REDACTED]"
+	}
+	return value
 }
 
 // MaskSensitiveQuery masks sensitive query parameters, e.g. auth_token, within the raw query string.

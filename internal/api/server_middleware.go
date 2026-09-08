@@ -184,6 +184,9 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 		}
 
 		statusCode := err.HTTPStatusCode()
+		if sdkaccess.IsAuthErrorCode(err, sdkaccess.AuthErrorCodeInvalidCredential) {
+			c.Set(invalidUserKeyAuditContext, true)
+		}
 		if statusCode >= http.StatusInternalServerError {
 			log.Errorf("authentication middleware error: %v", err)
 		}
