@@ -54,7 +54,10 @@ func (s *Server) userManagementMiddleware() gin.HandlerFunc {
 			Authorize:       s.userManagement.CheckPermissions,
 			FilterProviders: s.userManagement.FilterProviders,
 		}
+		s.attachUserRequestCapture(c, &hooks)
 		c.Request = c.Request.WithContext(sdkaccess.WithRequestHooks(c.Request.Context(), hooks))
+		finishCapture := s.beginUserHTTPRequestCapture(c)
+		defer finishCapture()
 		if errCheck := s.userManagement.CheckRequest(c.Request.Context()); errCheck != nil {
 			var response interface {
 				StatusCode() int

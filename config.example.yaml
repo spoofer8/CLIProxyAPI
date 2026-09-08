@@ -47,6 +47,9 @@ user-management:
     ttl: "12h"
   cache:
     ttl: "30s"
+  request-activity:
+    enabled: true # Record sanitized request content for named user API keys.
+    retention-days: 7 # Admin-only history; expired content is hidden and removed.
 
 # Authentication directory (supports ~ for home directory)
 auth-dir: "~/.cli-proxy-api"

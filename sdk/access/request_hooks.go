@@ -9,6 +9,10 @@ type RequestHooks struct {
 	Begin           func(context.Context) (func(), error)
 	Authorize       func(context.Context, PolicyTarget) error
 	FilterProviders func(context.Context, string, string, []string) ([]string, error)
+	// CopyContext carries service-owned, immutable request correlation into SDK contexts.
+	CopyContext func(context.Context, context.Context) context.Context
+	// Capture records an original WebSocket turn and returns its completion callback.
+	Capture func(context.Context, string, []byte) (context.Context, func(int))
 }
 
 // PolicyTarget distinguishes client-visible model names from names rewritten

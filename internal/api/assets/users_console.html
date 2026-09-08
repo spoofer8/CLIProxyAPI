@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Users & activity · CLIProxyAPI</title>
+  <link rel="stylesheet" href="/users/assets/users_console.css">
+  <script src="/users/assets/users_console.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a href="/management.html" class="brand" aria-label="Back to management"><span class="brand-mark" aria-hidden="true">C</span><span>CLIProxyAPI</span></a>
+    <nav aria-label="Main navigation"><a href="/management.html">Management</a><a href="/users" aria-current="page">Users & activity</a></nav>
+    <div class="connection"><span id="connection-label">Connecting…</span><button id="change-auth" class="quiet" type="button">Account</button></div>
+  </header>
+
+  <section id="auth-panel" class="auth-panel" hidden>
+    <div class="auth-box"><h1>Connect to management</h1><p>Use your admin session or enter the management key for this server.</p>
+      <a class="button primary" href="/login">Sign in with an admin account</a>
+      <form id="key-login-form"><label for="management-key">Management key</label><div class="input-action"><input id="management-key" type="password" autocomplete="off" spellcheck="false" required><button type="submit" class="button secondary">Connect</button></div><p class="hint">Used only in this tab. It is never added to the URL.</p></form>
+      <p id="auth-error" class="error" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <div id="workspace" class="workspace" hidden>
+    <aside class="people-pane" aria-label="Users">
+      <div class="pane-heading"><h1>Users</h1><button id="new-user" class="icon-button" title="Create user" aria-label="Create user" type="button">+</button></div>
+      <label class="sr-only" for="user-search">Search users by name or email</label><input id="user-search" class="search" type="search" placeholder="Search name or email" autocomplete="off">
+      <div class="list-meta"><span id="user-count">Loading users…</span><button id="refresh-users" class="quiet" type="button">Refresh</button></div>
+      <div id="user-list" class="user-list" role="list"></div>
+      <button id="more-users" class="button list-more" type="button" hidden>Load more users</button>
+      <button id="open-settings" class="settings-link" type="button"><span class="settings-symbol" aria-hidden="true">⚙</span><span>Quota defaults<span id="sidebar-enforcement" class="subtle">Loading settings…</span></span><span aria-hidden="true">›</span></button>
+    </aside>
+
+    <main class="account-pane">
+      <div id="page-error" class="notice error" role="alert" hidden></div>
+      <section id="no-user" class="empty account-empty"><div class="empty-symbol" aria-hidden="true">☷</div><h2>A clear view of every account</h2><p>Select a user to review requests, read their content and manage a monthly token limit.</p><button id="empty-create-user" class="button primary" type="button">Create user</button></section>
+      <section id="account" hidden>
+        <header class="account-heading"><div><div class="name-row"><h2 id="user-name"></h2><span id="user-status" class="badge"></span></div><p id="user-email" class="subtle"></p></div><div class="account-actions"><button id="open-keys" class="button secondary" type="button">API keys</button><button id="open-quota" class="button secondary" type="button">Edit quota</button></div></header>
+        <section class="usage-strip" aria-label="Monthly usage"><div class="usage-main"><span id="month-label" class="subtle">This month</span><div><strong id="used-tokens">—</strong><span class="subtle"> tokens used</span></div><div class="progress-track"><div id="quota-progress" class="progress-fill"></div></div><p id="quota-description" class="hint"></p></div><div class="usage-stat"><span>Input</span><strong id="input-tokens">—</strong></div><div class="usage-stat"><span>Output</span><strong id="output-tokens">—</strong></div><div class="usage-stat"><span>Upstream attempts</span><strong id="request-count">—</strong></div><div class="usage-enforcement"><span id="enforcement-badge" class="badge"></span><button id="usage-settings" class="quiet" type="button">Manage defaults</button></div></section>
+        <div class="activity-heading"><div><h3>Request activity</h3><p id="retention-note" class="hint"></p></div><button id="refresh-requests" class="button secondary" type="button">Refresh</button></div>
+        <div class="filters"><label><span class="sr-only">Filter by model</span><input id="model-filter" type="search" placeholder="Filter model" autocomplete="off"></label><label><span class="sr-only">Filter by status</span><select id="status-filter"><option value="">All statuses</option><option value="success">Successful</option><option value="error">Errors</option></select></label><label><span class="sr-only">Filter by time</span><select id="time-filter"><option value="">All retained activity</option><option value="24">Last 24 hours</option><option value="168">Last 7 days</option></select></label><span id="log-count" class="subtle"></span></div>
+        <div class="activity-grid" id="activity-grid"><section class="requests-pane" aria-label="Requests"><div class="table-scroll"><table><thead><tr><th>Time</th><th>Model / request</th><th>Status</th><th class="numeric">Tokens</th><th class="numeric duration">Duration</th></tr></thead><tbody id="request-list"></tbody></table></div><div id="requests-empty" class="empty compact" hidden><h4>No requests yet</h4><p>Requests made with this user’s API keys will appear here.</p></div><button id="more-requests" class="button list-more" type="button" hidden>Load older requests</button></section>
+          <aside id="inspector" class="inspector" aria-label="Request content" hidden><header class="inspector-header"><div><h3>Request content</h3><p id="detail-meta" class="hint"></p></div><button id="close-inspector" class="icon-button" aria-label="Close request content" type="button">×</button></header><div id="detail-summary" class="detail-summary"></div><div id="truncation-note" class="notice" hidden></div><div class="inspector-tabs" role="tablist" aria-label="Content view"><button id="conversation-tab" type="button" role="tab" aria-selected="true">Conversation</button><button id="raw-tab" type="button" role="tab" aria-selected="false">Sanitized JSON</button><button id="copy-content" class="quiet" type="button">Copy</button></div><div id="conversation" class="conversation" role="tabpanel"></div><pre id="raw-content" class="raw-content" role="tabpanel" hidden></pre></aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="quota-dialog"><form id="quota-form"><header class="dialog-heading"><h2>Monthly token limit</h2><button class="icon-button" type="button" data-close="quota-dialog" aria-label="Close">×</button></header><p id="quota-user" class="subtle"></p><label for="quota-mode">Limit for this user</label><select id="quota-mode"><option value="inherit">Inherit the global default</option><option value="unlimited">Unlimited</option><option value="custom">Custom limit</option></select><div id="custom-quota-field" hidden><label for="quota-value">Tokens per month</label><input id="quota-value" type="number" min="1" max="9007199254740991" step="1" inputmode="numeric"></div><p id="quota-form-note" class="hint"></p><p class="form-error error" role="alert" hidden></p><footer><button class="button secondary" type="button" data-close="quota-dialog">Cancel</button><button class="button primary" type="submit">Save quota</button></footer></form></dialog>
+  <dialog id="settings-dialog"><form id="settings-form"><header class="dialog-heading"><h2>Quota defaults</h2><button class="icon-button" type="button" data-close="settings-dialog" aria-label="Close">×</button></header><p class="subtle">Applies to users who inherit the global default.</p><label for="default-limit">Default tokens per month</label><input id="default-limit" type="number" min="0" max="9007199254740991" step="1" inputmode="numeric"><p class="hint">Set 0 for unlimited.</p><label class="checkbox-row"><input id="enforce-quotas" type="checkbox"><span>Enforce monthly limits</span></label><p class="hint">When off, usage is tracked and requests continue past a limit. Limits reset each calendar month in UTC.</p><div class="settings-capture"><strong>Request content</strong><p id="capture-settings" class="hint"></p></div><p class="form-error error" role="alert" hidden></p><footer><button class="button secondary" type="button" data-close="settings-dialog">Cancel</button><button class="button primary" type="submit">Save defaults</button></footer></form></dialog>
+  <dialog id="create-dialog"><form id="create-form"><header class="dialog-heading"><h2>Create user</h2><button class="icon-button" type="button" data-close="create-dialog" aria-label="Close">×</button></header><label for="create-name">Display name</label><input id="create-name" maxlength="200" autocomplete="off"><label for="create-email">Email address</label><input id="create-email" type="email" required maxlength="320" autocomplete="off"><p class="hint">The new user inherits your global quota. Issue an API key after creating the account.</p><p class="form-error error" role="alert" hidden></p><footer><button class="button secondary" type="button" data-close="create-dialog">Cancel</button><button class="button primary" type="submit">Create user</button></footer></form></dialog>
+  <dialog id="keys-dialog"><header class="dialog-heading"><h2>API keys</h2><button class="icon-button" type="button" data-close="keys-dialog" aria-label="Close">×</button></header><p id="keys-user" class="subtle"></p><div id="keys-list"></div><form id="issue-form"><label for="key-label">Label for a new key</label><div class="input-action"><input id="key-label" placeholder="e.g. Desktop client" maxlength="200"><button class="button primary" type="submit">Issue key</button></div></form><div id="new-key-panel" class="new-key-panel" hidden><strong>Copy this key now</strong><p class="hint">It will not be shown again.</p><code id="new-key-value"></code><button id="copy-key" class="button secondary" type="button">Copy key</button></div><p id="keys-error" class="error" role="alert" hidden></p></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

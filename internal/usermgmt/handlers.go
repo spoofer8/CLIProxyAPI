@@ -53,6 +53,8 @@ func (r *Runtime) RegisterManagementRoutes(group *gin.RouterGroup) {
 	group.PUT("/users/:id/permissions", r.replacePermissions)
 	group.POST("/users/:id/password", r.setPassword)
 	group.GET("/audit", r.listAudit)
+	group.GET("/users/:id/requests", r.listRequestActivity)
+	group.GET("/requests/:id", r.getRequestActivity)
 }
 
 func newID() (string, error) {

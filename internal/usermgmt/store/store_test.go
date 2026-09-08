@@ -85,8 +85,8 @@ func TestPostgresSchemaAndConstraints(t *testing.T) {
 		t.Fatal(errSchema)
 	}
 	var tableCount int
-	if errQuery := s.db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name LIKE 'cpa_%'`).Scan(&tableCount); errQuery != nil || tableCount != 6 {
-		t.Fatalf("expected six domain tables, got %d (error %v)", tableCount, errQuery)
+	if errQuery := s.db.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name LIKE 'cpa_%'`).Scan(&tableCount); errQuery != nil || tableCount != 7 {
+		t.Fatalf("expected seven domain tables, got %d (error %v)", tableCount, errQuery)
 	}
 	for _, statement := range []string{
 		`INSERT INTO cpa_users (id, email) VALUES ('user1', 'alice@example.com')`,

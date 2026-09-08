@@ -28,6 +28,8 @@ func (s *Server) registerManagementRoutes() {
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
 	if s.userManagement != nil {
 		s.userManagement.RegisterManagementRoutes(mgmt)
+		mgmt.GET("/user-management/settings", s.mgmt.GetUserManagementSettings)
+		mgmt.PUT("/user-management/settings", s.mgmt.PutUserManagementSettings)
 	}
 	{
 		mgmt.GET("/config", s.mgmt.GetConfig)

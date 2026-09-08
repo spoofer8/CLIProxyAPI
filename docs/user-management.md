@@ -4,6 +4,46 @@ User management is an optional PostgreSQL-backed feature. Existing `api-keys`
 remain usable; enabling the feature does not replace client credentials or the
 management secret.
 
+## Users & activity UI
+
+Open `/users`, or choose **Users & activity** in the management panel. Named
+administrator sessions and the panel's saved management key are supported;
+the page also accepts a management key directly when needed.
+
+- Select a user to see monthly usage and their request history. Use **Edit
+  quota** to choose an inherited default, unlimited usage, or a custom monthly
+  token limit. **Quota defaults** controls the global default and enforcement.
+  A limit is only enforced when **Enforce monthly limits** is on.
+- Select a request to read its conversation, system instructions, tool calls,
+  and tool results. **Sanitized JSON** shows the retained request payload.
+  Model, status and time filters apply to the stored history, including older
+  pages. Tokens/provider information appears when reported by the executor.
+- **Create user** and **API keys** provision client access. Requests must use
+  that user's issued API key to appear under their account. Shared legacy keys
+  are not attributed to individual users or included in this content history.
+
+Capture applies to new requests after deployment; historical prompts cannot be
+recovered when request logging was off. Ordinary HTTP requests and individual
+Responses WebSocket turns are recorded, including their original submitted
+content rather than a reconstructed conversation. Responses from the upstream
+are not stored, except for assistant messages already present in a client's
+submitted history.
+
+Request activity defaults to enabled with seven days of retention. Override
+`user-management.request-activity.enabled` or `retention-days` (1–365) in config.
+Authentication headers/query credentials are excluded; credential-shaped JSON
+fields, nested JSON tool credentials and inline file data are redacted/omitted.
+Text is displayed without executing HTML or loading remote attachments.
+Inspection is bounded to 4 MiB and each stored preview to 256 KiB; large valid
+requests retain a shortened preview of the latest user content. Omitted or
+truncated content is labelled. In-progress requests may not have their final
+content, status or usage yet; use **Refresh** after completion.
+
+Only management administrators may list or read captured content. The bounded
+writer is best effort: a database outage or full queue can leave activity
+missing, but does not fail or modify proxy requests. Monthly quota accounting
+remains separate from this diagnostic history.
+
 ## Delivery status
 
 | Phase | Capability | Status |

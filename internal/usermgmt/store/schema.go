@@ -67,6 +67,22 @@ var schemaStatements = []string{
 		detail JSONB NOT NULL DEFAULT '{}'::jsonb
 	)`,
 	`CREATE INDEX IF NOT EXISTS cpa_audit_at ON cpa_audit_events(at DESC)`,
+	`CREATE TABLE IF NOT EXISTS cpa_request_activity (
+		sequence BIGSERIAL PRIMARY KEY,
+		id TEXT NOT NULL UNIQUE,
+		user_id TEXT NOT NULL REFERENCES cpa_users(id) ON DELETE CASCADE,
+		key_id TEXT NOT NULL DEFAULT '',
+		at TIMESTAMPTZ NOT NULL,
+		method TEXT NOT NULL, path TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
+		status_code INTEGER NOT NULL DEFAULT 0,
+		duration_ms BIGINT NOT NULL DEFAULT 0,
+		provider TEXT, input_tokens BIGINT, output_tokens BIGINT, total_tokens BIGINT,
+		body_preview TEXT NOT NULL DEFAULT '' CHECK (octet_length(body_preview) <= 262144),
+		body_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+		body_omitted_reason TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE INDEX IF NOT EXISTS cpa_request_activity_user_sequence ON cpa_request_activity(user_id,sequence DESC)`,
+	`CREATE INDEX IF NOT EXISTS cpa_request_activity_at ON cpa_request_activity(at)`,
 }
 
 // EnsureSchema is idempotent and transactional. An advisory lock also makes

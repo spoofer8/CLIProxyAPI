@@ -50,6 +50,7 @@ type usageScope struct {
 	accountant    *accountant
 	permissions   *permissionCache
 	audit         *auditWriter
+	activity      *requestActivityWriter
 	cfg           config.UserManagementConfig
 	leases        int
 	retired       bool
@@ -105,6 +106,7 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 		ttl, _ := time.ParseDuration(cfg.Cache.TTL) // validated above
 		oldAuth.updateTTL(ttl)
 		oldScope.permissions.updateTTL(ttl)
+		oldScope.activity.retentionDays.Store(int64(cfg.RequestActivity.RetentionDays))
 		r.mu.Unlock()
 		return nil
 	}
@@ -131,6 +133,7 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 		id: scopeID, store: replacement, auth: replacementAuth, accountant: newAccountant(replacement), cfg: cfg,
 		permissions: newPermissionCache(replacement, ttl),
 		audit:       newAuditWriter(replacement),
+		activity:    newRequestActivityWriter(replacement, cfg.RequestActivity.RetentionDays),
 		idle:        make(chan struct{}), done: make(chan struct{}), cleanupCtx: cleanupCtx, cancelCleanup: cancelCleanup,
 	}
 	r.mu.Lock()
@@ -333,6 +336,7 @@ func (r *Runtime) HandleUsage(ctx context.Context, record usage.Record) {
 		return
 	}
 	scope.accountant.enqueue(delta)
+	r.recordRequestActivityUsage(ctx, scope, record.Provider, delta)
 }
 
 func (r *Runtime) retire(scope *usageScope) {
@@ -386,6 +390,9 @@ func (r *Runtime) finishRetirement(scope *usageScope) {
 	}
 	if errClose := scope.audit.close(cleanupCtx); errClose != nil {
 		log.WithError(errClose).Warn("user management audit drain did not complete")
+	}
+	if errClose := scope.activity.close(cleanupCtx); errClose != nil {
+		log.WithError(errClose).Warn("user management request activity drain did not complete")
 	}
 	scope.auth.close()
 	if errClose := scope.store.Close(); errClose != nil {

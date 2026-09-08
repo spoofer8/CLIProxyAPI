@@ -34,6 +34,20 @@ const managementSessionBridge = `<script id="cpa-session-bridge">
 (() => {
   "use strict";
   const authenticated = __CPA_AUTHENTICATED__;
+  const mountUsersLink = () => {
+    if (document.getElementById("cpa-users-link")) return;
+    const link = document.createElement("a");
+    link.id = "cpa-users-link";
+    link.href = "/users";
+    link.textContent = "Users & activity";
+    link.style.cssText = "position:fixed;left:16px;bottom:16px;z-index:2147483646;padding:10px 15px;background:#162b3b;color:#fff;border:1px solid #456275;border-radius:6px;font:14px system-ui,sans-serif;text-decoration:none;box-shadow:0 2px 8px #0002";
+    document.body.append(link);
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mountUsersLink, {once:true});
+  } else {
+    mountUsersLink();
+  }
   const modeKey = "cpa-session-mode";
   const storage = window.localStorage;
   const removeItem = Storage.prototype.removeItem;

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
@@ -372,7 +373,17 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		pinnedAuthID = ""
 	}
 
+	var finishCapture func(int)
+	captureStatus := http.StatusOK
+	completeCapture := func() {
+		if finishCapture != nil {
+			finishCapture(captureStatus)
+			finishCapture = nil
+		}
+	}
+	defer completeCapture()
 	for {
+		completeCapture()
 		msgType, payload, errReadMessage := conn.ReadMessage()
 		if errReadMessage != nil {
 			wsTerminateErr = errReadMessage
@@ -404,7 +415,12 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		if requestModelName == "" {
 			requestModelName = strings.TrimSpace(gjson.GetBytes(lastRequest, "model").String())
 		}
-		executionParent := context.WithValue(c.Request.Context(), "gin", c)
+		frameCtx := c.Request.Context()
+		captureStatus = http.StatusOK
+		if hooks, ok := sdkaccess.RequestHooksFromContext(frameCtx); ok && hooks.Capture != nil {
+			frameCtx, finishCapture = hooks.Capture(frameCtx, requestModelName, payload)
+		}
+		executionParent := context.WithValue(frameCtx, "gin", c)
 		executionParent, routeOverridesModelResolution := h.PrepareStreamModelRoute(
 			executionParent,
 			h.HandlerType(),
@@ -452,6 +468,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		requestRequiresCurrentUpstreamWebsocket := responsesWebsocketRequestRequiresCurrentUpstream(payload)
 		if upstreamMode == responsesWebsocketUpstreamModeWS && !nativeWebsocketPassthrough {
 			if requestRequiresCurrentUpstreamWebsocket {
+				captureStatus = http.StatusConflict
 				replayErr := responsesWebsocketHTTPReplayRequiredError()
 				wsTerminateErr = replayErr
 				matched, errClose := writer.closeForUpstreamError(replayErr)
@@ -499,6 +516,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			)
 		}
 		if errMsg != nil {
+			captureStatus = errMsg.StatusCode
 			h.LoggingAPIResponseError(context.WithValue(context.Background(), "gin", c), errMsg)
 			markAPIResponseTimestamp(c)
 			errorPayload, errWrite := writeResponsesWebsocketError(writer, wsTimelineLog, errMsg)
@@ -510,6 +528,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				websocketPayloadPreview(errorPayload),
 			)
 			if errWrite != nil {
+				captureStatus = 499
 				log.Warnf(
 					"responses websocket: downstream_out write failed id=%s event=%s error=%v",
 					passthroughSessionID,
@@ -535,6 +554,7 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			lastResponseID = ""
 			lastResponsePendingToolCallIDs = nil
 			if errWrite := writeResponsesWebsocketSyntheticPrewarm(c, writer, requestJSON, wsTimelineLog, passthroughSessionID); errWrite != nil {
+				captureStatus = 499
 				wsTerminateErr = errWrite
 				return
 			}
@@ -606,6 +626,16 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				suppressError: replayPinnedAuthFailure,
 			},
 		)
+		if forwardErrMsg != nil {
+			captureStatus = forwardErrMsg.StatusCode
+		}
+		if errForward != nil {
+			captureStatus = http.StatusBadGateway
+			if isWebsocketConnectionClosedError(errForward) {
+				captureStatus = 499
+			}
+		}
+		completeCapture()
 		if errForward != nil {
 			wsTerminateErr = errForward
 			switch {

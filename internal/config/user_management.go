@@ -17,11 +17,22 @@ const (
 // DSN retains environment references when configuration is saved and is omitted
 // from management API JSON responses. Only ResolvedDSN expands references.
 type UserManagementConfig struct {
-	Enabled bool                        `yaml:"enabled" json:"enabled"`
-	DSN     string                      `yaml:"dsn" json:"-"`
-	Quota   UserManagementQuotaConfig   `yaml:"quota" json:"quota"`
-	Session UserManagementSessionConfig `yaml:"session" json:"session"`
-	Cache   UserManagementCacheConfig   `yaml:"cache" json:"cache"`
+	Enabled         bool                                `yaml:"enabled" json:"enabled"`
+	DSN             string                              `yaml:"dsn" json:"-"`
+	Quota           UserManagementQuotaConfig           `yaml:"quota" json:"quota"`
+	Session         UserManagementSessionConfig         `yaml:"session" json:"session"`
+	Cache           UserManagementCacheConfig           `yaml:"cache" json:"cache"`
+	RequestActivity UserManagementRequestActivityConfig `yaml:"request-activity" json:"request-activity"`
+}
+
+// Request previews are bounded and redacted before entering the persistence queue.
+type UserManagementRequestActivityConfig struct {
+	Enabled       *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	RetentionDays int   `yaml:"retention-days" json:"retention-days"`
+}
+
+func (cfg UserManagementRequestActivityConfig) CaptureEnabled() bool {
+	return cfg.Enabled == nil || *cfg.Enabled
 }
 
 type UserManagementQuotaConfig struct {
@@ -50,6 +61,9 @@ func (cfg UserManagementConfig) WithDefaults() UserManagementConfig {
 	if cfg.Cache.TTL == "" {
 		cfg.Cache.TTL = DefaultUserManagementCacheTTL
 	}
+	if cfg.RequestActivity.RetentionDays == 0 {
+		cfg.RequestActivity.RetentionDays = 7
+	}
 	return cfg
 }
 
@@ -60,6 +74,9 @@ func (cfg UserManagementConfig) Validate() error {
 		return nil
 	}
 	cfg = cfg.WithDefaults()
+	if cfg.RequestActivity.RetentionDays < 1 || cfg.RequestActivity.RetentionDays > 365 {
+		return fmt.Errorf("user-management.request-activity.retention-days must be 1..365")
+	}
 	if _, errResolve := cfg.ResolvedDSN(); errResolve != nil {
 		return errResolve
 	}
