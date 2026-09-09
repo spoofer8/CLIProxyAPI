@@ -37,3 +37,18 @@ func TestManagementSessionBridgeHandlesMissingSessionAndHead(t *testing.T) {
 		t.Fatal("fallback injection modified upstream content")
 	}
 }
+
+func TestNativePanelOnlyReceivesInvisibleSessionBootstrap(t *testing.T) {
+	for _, marker := range []string{`<meta name="cpa-native-management" content="1">`, `<meta content=1 name=cpa-native-management>`} {
+		original := []byte(`<html><head>` + marker + `<script type="module">app()</script></head><body></body></html>`)
+		result := injectManagementSessionBridge(original, true)
+		if !bytes.Contains(result, []byte("const authenticated = true;")) || !bytes.Contains(result, []byte("cli-proxy-auth")) {
+			t.Fatal("native panel lost named-session bootstrap")
+		}
+		for _, extra := range []string{"cpa-users-link", "cpa-session-tools", "Storage.prototype.removeItem", "position:fixed"} {
+			if bytes.Contains(result, []byte(extra)) {
+				t.Fatalf("native panel received external UI or logout handling: %s", extra)
+			}
+		}
+	}
+}

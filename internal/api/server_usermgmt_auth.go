@@ -48,7 +48,6 @@ func (s *Server) registerUserManagementAuthRoutes() {
 	}
 	s.engine.GET("/login", available, s.userManagement.LoginPage)
 	s.engine.GET("/users", s.serveUsersConsole)
-	s.engine.GET("/users/assets/:asset", s.serveUsersConsole)
 	s.engine.POST("/v0/management/login", available, origin, s.userManagement.Login)
 	s.engine.POST("/v0/management/logout", available, origin, s.userManagement.Logout)
 }

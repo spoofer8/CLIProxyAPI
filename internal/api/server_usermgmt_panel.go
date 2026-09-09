@@ -6,6 +6,7 @@ import (
 )
 
 var managementPanelHead = regexp.MustCompile(`(?i)<head(?:\s[^>]*)?>`)
+var nativeManagementPanel = regexp.MustCompile(`(?i)<meta\b[^>]*\bname\s*=\s*["']?cpa-native-management(?:["'\s>])`)
 
 // injectManagementSessionBridge adapts the downloaded panel at response time.
 // authenticated is supplied by the server's management/session access checks;
@@ -18,7 +19,11 @@ func injectManagementSessionBridge(html []byte, authenticated bool) []byte {
 	if authenticated {
 		flag = []byte("true")
 	}
-	bridge := bytes.Replace([]byte(managementSessionBridge), []byte("__CPA_AUTHENTICATED__"), flag, 1)
+	script := managementSessionBridge
+	if nativeManagementPanel.Match(html) {
+		script = nativeManagementSessionBootstrap
+	}
+	bridge := bytes.Replace([]byte(script), []byte("__CPA_AUTHENTICATED__"), flag, 1)
 	position := 0
 	if head := managementPanelHead.FindIndex(html); head != nil {
 		position = head[1]
@@ -34,20 +39,6 @@ const managementSessionBridge = `<script id="cpa-session-bridge">
 (() => {
   "use strict";
   const authenticated = __CPA_AUTHENTICATED__;
-  const mountUsersLink = () => {
-    if (document.getElementById("cpa-users-link")) return;
-    const link = document.createElement("a");
-    link.id = "cpa-users-link";
-    link.href = "/users";
-    link.textContent = "Users & activity";
-    link.style.cssText = "position:fixed;left:16px;bottom:16px;z-index:2147483646;padding:10px 15px;background:#162b3b;color:#fff;border:1px solid #456275;border-radius:6px;font:14px system-ui,sans-serif;text-decoration:none;box-shadow:0 2px 8px #0002";
-    document.body.append(link);
-  };
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mountUsersLink, {once:true});
-  } else {
-    mountUsersLink();
-  }
   const modeKey = "cpa-session-mode";
   const storage = window.localStorage;
   const removeItem = Storage.prototype.removeItem;
@@ -142,5 +133,34 @@ const managementSessionBridge = `<script id="cpa-session-bridge">
   } else {
     mount();
   }
+})();
+</script>`
+
+// The integrated React panel owns navigation, notifications and logout. It only
+// needs the cookie-backed auth bootstrap before its normal auth store starts.
+const nativeManagementSessionBootstrap = `<script id="cpa-session-bridge">
+(() => {
+  "use strict";
+  const authenticated = __CPA_AUTHENTICATED__;
+  const storage = window.localStorage;
+  const modeKey = "cpa-session-mode";
+  const namedMode = storage.getItem(modeKey) === "true";
+  if (new URLSearchParams(location.search).get("legacy") === "1") {
+    if (namedMode) {
+      for (const key of [modeKey, "cli-proxy-auth", "apiBase", "managementKey", "isLoggedIn"]) storage.removeItem(key);
+    }
+    return;
+  }
+  if (!authenticated) {
+    if (namedMode) location.replace("/login");
+    return;
+  }
+  storage.setItem(modeKey, "true");
+  storage.setItem("cli-proxy-auth", JSON.stringify({state: {
+    apiBase: location.origin, managementKey: "cpa-session", rememberPassword: true
+  }, version: 0}));
+  storage.setItem("apiBase", JSON.stringify(location.origin));
+  storage.setItem("managementKey", JSON.stringify("cpa-session"));
+  storage.setItem("isLoggedIn", "true");
 })();
 </script>`

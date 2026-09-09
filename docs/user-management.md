@@ -6,19 +6,22 @@ management secret.
 
 ## Users & activity UI
 
-Open `/users`, or choose **Users & activity** in the management panel. Named
-administrator sessions and the panel's saved management key are supported;
-the page also accepts a management key directly when needed.
+Open `/management.html#/users`, or choose **Users & activity** in the management
+panel's sidebar. The page shares the panel's layout, theme, language and login.
+Named administrator sessions and the panel's management-key login are supported.
+Existing `/users` bookmarks redirect to this native route.
 
 - Select a user to see monthly usage and their request history. Use **Edit
   quota** to choose an inherited default, unlimited usage, or a custom monthly
-  token limit. **Quota defaults** controls the global default and enforcement.
-  A limit is only enforced when **Enforce monthly limits** is on.
-- Select a request to read its conversation, system instructions, tool calls,
-  and tool results. **Sanitized JSON** shows the retained request payload.
+  token limit. **Quota settings** controls the global default and enforcement;
+  set the default to 0 for unlimited tokens. A limit is only enforced when
+  **Enforce token limits** is on.
+- Choose **Inspect request** in the request table to read its conversation,
+  system instructions, tool calls and tool results. **Sanitized JSON** shows
+  the retained request payload.
   Model, status and time filters apply to the stored history, including older
   pages. Tokens/provider information appears when reported by the executor.
-- **Create user** and **API keys** provision client access. Requests must use
+- **New user** and **API keys** provision client access. Requests must use
   that user's issued API key to appear under their account. Shared legacy keys
   are not attributed to individual users or included in this content history.
 
@@ -43,6 +46,11 @@ Only management administrators may list or read captured content. The bounded
 writer is best effort: a database outage or full queue can leave activity
 missing, but does not fail or modify proxy requests. Monthly quota accounting
 remains separate from this diagnostic history.
+
+The frontend source is vendored in `management-ui/` from upstream release
+`v1.22.15`. Build and deploy its single HTML bundle as `management.html` and keep
+`remote-management.disable-auto-update-panel: true` to preserve the integration.
+See [frontend provenance and build instructions](../management-ui/UPSTREAM.md).
 
 ## Delivery status
 
@@ -569,12 +577,14 @@ cookie with `HttpOnly`, `SameSite=Strict`, and `Path=/`. Sessions expire after
 the configured absolute TTL, normally 12 hours; the database stores the
 cookie's hash. The current plain-HTTP deployment does not set `Secure`.
 
-The downloaded panel remains unchanged on disk. A server-side response bridge
-initializes its login state using the public marker `cpa-session`; that marker
-is not a credential and cannot authenticate without a valid administrator
-cookie. Both the panel's normal Logout action and its account Sign out control
-call `POST /v0/management/logout` to revoke the server session. If logout fails,
-the control displays a retryable error rather than claiming success.
+The native bundle is built from the vendored frontend. A server-side response
+bridge initializes its login state using the public marker `cpa-session`; that
+marker is not a credential and cannot authenticate without a valid administrator
+cookie. The bundle's `cpa-native-management` HTML marker keeps the bridge limited
+to session initialization. The panel's normal **Logout** action calls
+`POST /v0/management/logout` to revoke the server session before clearing login
+state and returning to `/login`. If logout fails, the panel displays its normal
+error notification and allows another attempt.
 
 Cookie-authenticated writes and login/logout submissions require the same
 origin. Remote access still respects the existing remote-management setting.
