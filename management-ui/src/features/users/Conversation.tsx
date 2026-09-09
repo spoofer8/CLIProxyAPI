@@ -1,6 +1,31 @@
 import { useTranslation } from 'react-i18next';
+import { Fragment, useState, type ReactNode } from 'react';
+import { Button } from '@/components/ui/Button';
 import { isContentRecord, prettyContent } from './logic';
 import styles from './UsersPage.module.scss';
+
+function Incremental({
+  items,
+  render,
+}: {
+  items: unknown[];
+  render: (item: unknown, index: number) => ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [visible, setVisible] = useState(50);
+  return (
+    <>
+      {items.slice(0, visible).map((item, index) => (
+        <Fragment key={index}>{render(item, index)}</Fragment>
+      ))}
+      {visible < items.length && (
+        <Button variant="secondary" size="sm" onClick={() => setVisible((count) => count + 50)}>
+          {t('users.activity_show_more', { count: items.length - visible })}
+        </Button>
+      )}
+    </>
+  );
+}
 
 function JsonBlock({ title, value }: { title: string; value: unknown }) {
   return (
@@ -39,10 +64,10 @@ function Content({ value, depth = 0 }: { value: unknown; depth?: number }) {
   if (Array.isArray(value))
     return (
       <>
-        {value.length > 200 && <p className={styles.hint}>{t('users.latest_messages')}</p>}
-        {value.slice(-200).map((part, index) => (
-          <Content key={index} value={part} depth={depth + 1} />
-        ))}
+        <Incremental
+          items={value}
+          render={(part, index) => <Content key={index} value={part} depth={depth + 1} />}
+        />
       </>
     );
   if (!isContentRecord(value)) return <TextContent text={String(value)} />;
@@ -109,18 +134,20 @@ function Message({
         {typeof extra.name === 'string' ? ' · ' + extra.name : ''}
       </h4>
       <Content value={value} />
-      {calls.length > 200 && <p className={styles.hint}>{t('users.latest_messages')}</p>}
-      {calls.slice(-200).map((item, index) => {
-        const call = isContentRecord(item) ? item : {};
-        const fn = isContentRecord(call.function) ? call.function : call;
-        return (
-          <JsonBlock
-            key={index}
-            title={[t('users.tool_call'), fn.name ?? call.id].filter(Boolean).join(' · ')}
-            value={fn.arguments ?? item}
-          />
-        );
-      })}
+      <Incremental
+        items={calls}
+        render={(item, index) => {
+          const call = isContentRecord(item) ? item : {};
+          const fn = isContentRecord(call.function) ? call.function : call;
+          return (
+            <JsonBlock
+              key={index}
+              title={[t('users.tool_call'), fn.name ?? call.id].filter(Boolean).join(' · ')}
+              value={fn.arguments ?? item}
+            />
+          );
+        }}
+      />
       {extra.function_call != null && (
         <JsonBlock title={t('users.tool_call')} value={extra.function_call} />
       )}
@@ -137,9 +164,9 @@ export function Conversation({ body }: { body: unknown }) {
   const { t } = useTranslation();
   if (!body) return <p className={styles.empty}>{t('users.body_unavailable')}</p>;
   if (!isContentRecord(body)) return <Message role="other" value={body} />;
-  if (body._preview && body.content) {
+  if (body._preview && (body.content || body.latest_user_content)) {
     const content = isContentRecord(body.content) ? body.content : {};
-    const latest = content.latest_user_content ?? body.content;
+    const latest = body.latest_user_content ?? content.latest_user_content ?? body.content;
     const extra = isContentRecord(latest) ? latest : {};
     return (
       <>
@@ -152,7 +179,7 @@ export function Conversation({ body }: { body: unknown }) {
       </>
     );
   }
-  const messages = body.messages ?? body.input ?? body.contents ?? body.prompt;
+  const messages = body.messages ?? body.output ?? body.input ?? body.contents ?? body.prompt;
   const systems = [
     body.system,
     body.instructions,
@@ -166,30 +193,32 @@ export function Conversation({ body }: { body: unknown }) {
       {systems.map((value, index) => (
         <Message key={'system' + index} role="system" value={value} />
       ))}
-      {entries.length > 200 && <p className={styles.notice}>{t('users.latest_messages')}</p>}
-      {entries.slice(-200).map((entry, index) => {
-        if (!isContentRecord(entry)) return <Message key={index} role="user" value={entry} />;
-        const role =
-          entry.role === 'model'
-            ? 'assistant'
-            : typeof entry.role === 'string'
-              ? entry.role
-              : /tool|function/.test(String(entry.type ?? ''))
-                ? 'tool'
-                : 'user';
-        return (
-          <Message
-            key={index}
-            role={role}
-            value={
-              entry.content ??
-              entry.parts ??
-              (entry.tool_calls || entry.function_call ? null : entry)
-            }
-            extra={entry}
-          />
-        );
-      })}
+      <Incremental
+        items={entries}
+        render={(entry, index) => {
+          if (!isContentRecord(entry)) return <Message key={index} role="user" value={entry} />;
+          const role =
+            entry.role === 'model'
+              ? 'assistant'
+              : typeof entry.role === 'string'
+                ? entry.role
+                : /tool|function/.test(String(entry.type ?? ''))
+                  ? 'tool'
+                  : 'user';
+          return (
+            <Message
+              key={index}
+              role={role}
+              value={
+                entry.content ??
+                entry.parts ??
+                (entry.tool_calls || entry.function_call ? null : entry)
+              }
+              extra={entry}
+            />
+          );
+        }}
+      />
       {hasTools && <JsonBlock title={t('users.available_tools')} value={body.tools} />}
       {hasFunctions && <JsonBlock title={t('users.available_functions')} value={body.functions} />}
       {!systems.length && !entries.length && !hasTools && !hasFunctions && (

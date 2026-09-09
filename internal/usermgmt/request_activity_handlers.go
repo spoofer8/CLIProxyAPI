@@ -10,8 +10,7 @@ import (
 )
 
 func (r *Runtime) requestActivitySince() time.Time {
-	_, cfg := r.Snapshot()
-	return time.Now().UTC().Add(-time.Duration(cfg.WithDefaults().RequestActivity.RetentionDays) * 24 * time.Hour)
+	return time.Time{}
 }
 
 func (r *Runtime) listRequestActivity(c *gin.Context) {
@@ -52,7 +51,8 @@ func (r *Runtime) listRequestActivity(c *gin.Context) {
 		}
 	}
 	model, status := c.Query("model"), c.Query("status")
-	if !validText(model, 256) || (status != "" && status != "success" && status != "error") {
+	prompt, sessionID := c.Query("q"), c.Query("session_id")
+	if !validText(prompt, 2048) || !validText(sessionID, 512) || !validText(model, 256) || (status != "" && status != "success" && status != "error") {
 		badRequest(c, "Invalid request activity filter")
 		return
 	}
@@ -62,7 +62,7 @@ func (r *Runtime) listRequestActivity(c *gin.Context) {
 			return errUser
 		}
 		var errQuery error
-		items, errQuery = db.ListRequestActivityFiltered(c.Request.Context(), userID, limit, before, since, model, status)
+		items, errQuery = db.ListRequestActivitySearch(c.Request.Context(), userID, limit, before, since, model, status, prompt, sessionID)
 		return errQuery
 	})
 	if errList != nil {
@@ -74,6 +74,63 @@ func (r *Runtime) listRequestActivity(c *gin.Context) {
 		next = items[len(items)-1].Sequence
 	}
 	c.JSON(http.StatusOK, gin.H{"requests": items, "next_before": next})
+}
+
+func (r *Runtime) getRequestActivityContent(c *gin.Context) {
+	id, ok := pathID(c, "id")
+	if !ok {
+		return
+	}
+	direction := c.DefaultQuery("direction", "request")
+	if direction != "request" && direction != "response" {
+		badRequest(c, "direction must be request or response")
+		return
+	}
+	limit := 20
+	if raw, exists := c.GetQuery("limit"); exists {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100 {
+			badRequest(c, "limit must be 1..100")
+			return
+		}
+		limit = parsed
+	}
+	after := int64(0)
+	if raw, exists := c.GetQuery("after"); exists {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			badRequest(c, "after must be a nonnegative cursor")
+			return
+		}
+		after = parsed
+	}
+	var chunks []store.RequestContentChunk
+	var item store.RequestActivity
+	errGet := r.withStore(false, func(db *store.Store) error {
+		var err error
+		item, err = db.GetRequestActivity(c.Request.Context(), id, time.Time{})
+		if err != nil {
+			return err
+		}
+		chunks, err = db.ListRequestContent(c.Request.Context(), id, direction, after, limit+1)
+		return err
+	})
+	if errGet != nil {
+		respondError(c, errGet)
+		return
+	}
+	next := int64(0)
+	if len(chunks) > limit {
+		chunks = chunks[:limit]
+		next = chunks[len(chunks)-1].Sequence
+	}
+	complete := (item.CaptureState == "complete" || item.CaptureState == "interrupted" || item.CaptureState == "legacy_preview") && next == 0
+	c.JSON(http.StatusOK, gin.H{"chunks": chunks, "next_after": next, "complete": complete, "capture_state": item.CaptureState})
+}
+
+// Kept separate so the shared management route owner can register atomically.
+func (r *Runtime) registerActivityContentRoutes(group *gin.RouterGroup) {
+	group.GET("/requests/:id/content", r.getRequestActivityContent)
 }
 
 func (r *Runtime) getRequestActivity(c *gin.Context) {

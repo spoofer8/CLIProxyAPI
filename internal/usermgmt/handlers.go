@@ -55,6 +55,8 @@ func (r *Runtime) RegisterManagementRoutes(group *gin.RouterGroup) {
 	group.GET("/audit", r.listAudit)
 	group.GET("/users/:id/requests", r.listRequestActivity)
 	group.GET("/requests/:id", r.getRequestActivity)
+	r.registerFinancialRoutes(group)
+	r.registerActivityContentRoutes(group)
 }
 
 func newID() (string, error) {
@@ -98,6 +100,8 @@ func badRequest(c *gin.Context, message string) {
 
 func respondError(c *gin.Context, err error) {
 	switch {
+	case errors.Is(err, store.ErrSystemAdminProtected):
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "The system Admin account cannot be disabled, demoted, or deleted"})
 	case errors.Is(err, ErrDisabled), errors.Is(err, store.ErrNotFound):
 		c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "Resource not found"})
 	case errors.Is(err, store.ErrConflict):

@@ -73,15 +73,16 @@ describe('retained conversation rendering', () => {
     expect(parsePreview('plain text')).toBe('plain text');
   });
 
-  test('caps conversation rendering with a visible notice and retains latest entries', () => {
+  test('starts chronological incremental rendering without discarding earlier entries', () => {
     const markup = render({
       messages: Array.from({ length: 205 }, (_, index) => ({
         role: 'user',
         content: 'message-number-' + index + '-end',
       })),
     });
-    expect(markup).toContain('Showing the latest 200');
-    expect(markup).not.toContain('message-number-0-end');
-    expect(markup).toContain('message-number-204-end');
+    expect(markup).toContain('message-number-0-end');
+    expect(markup).toContain('message-number-49-end');
+    expect(markup).not.toContain('message-number-50-end');
+    expect(markup).toContain('<button');
   });
 });

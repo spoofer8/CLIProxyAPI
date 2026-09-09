@@ -8,20 +8,28 @@ import (
 
 // RequestActivitySummary deliberately excludes all request content.
 type RequestActivitySummary struct {
-	Sequence     int64     `json:"-"`
-	ID           string    `json:"id"`
-	UserID       string    `json:"user_id"`
-	KeyID        string    `json:"key_id"`
-	At           time.Time `json:"at"`
-	Method       string    `json:"method"`
-	Path         string    `json:"path"`
-	Model        string    `json:"model"`
-	StatusCode   int       `json:"status_code"`
-	DurationMS   int64     `json:"duration_ms"`
-	Provider     *string   `json:"provider"`
-	InputTokens  *int64    `json:"input_tokens"`
-	OutputTokens *int64    `json:"output_tokens"`
-	TotalTokens  *int64    `json:"total_tokens"`
+	Sequence             int64     `json:"-"`
+	ID                   string    `json:"id"`
+	UserID               string    `json:"user_id"`
+	KeyID                string    `json:"key_id"`
+	At                   time.Time `json:"at"`
+	Method               string    `json:"method"`
+	Path                 string    `json:"path"`
+	Model                string    `json:"model"`
+	StatusCode           int       `json:"status_code"`
+	DurationMS           int64     `json:"duration_ms"`
+	Provider             *string   `json:"provider"`
+	InputTokens          *int64    `json:"input_tokens"`
+	OutputTokens         *int64    `json:"output_tokens"`
+	TotalTokens          *int64    `json:"total_tokens"`
+	PromptPreview        string    `json:"prompt_preview"`
+	SessionID            string    `json:"session_id"`
+	SessionSource        string    `json:"session_source"`
+	PreviousResponseID   string    `json:"previous_response_id"`
+	ResponseID           string    `json:"response_id"`
+	CaptureState         string    `json:"capture_state"`
+	RequestContentBytes  int64     `json:"request_content_bytes"`
+	ResponseContentBytes int64     `json:"response_content_bytes"`
 }
 
 type RequestActivity struct {
@@ -29,6 +37,7 @@ type RequestActivity struct {
 	BodyPreview       string `json:"body_preview"`
 	BodyTruncated     bool   `json:"body_truncated"`
 	BodyOmittedReason string `json:"body_omitted_reason"`
+	ResponsePreview   string `json:"response_preview"`
 }
 
 func (s *Store) InsertRequestActivity(ctx context.Context, item RequestActivity) error {
@@ -63,10 +72,10 @@ func (s *Store) AddRequestActivityUsage(ctx context.Context, id, provider string
 	return domainError("enrich request activity", errUpdate)
 }
 
-const requestActivityColumns = `sequence,id,user_id,key_id,at,method,path,model,status_code,duration_ms,provider,input_tokens,output_tokens,total_tokens`
+const requestActivityColumns = `sequence,id,user_id,key_id,at,method,path,model,status_code,duration_ms,provider,input_tokens,output_tokens,total_tokens,prompt_preview,session_id,session_source,previous_response_id,response_id,capture_state,request_content_bytes,response_content_bytes`
 
 func requestActivityScanTargets(item *RequestActivitySummary) []any {
-	return []any{&item.Sequence, &item.ID, &item.UserID, &item.KeyID, &item.At, &item.Method, &item.Path, &item.Model, &item.StatusCode, &item.DurationMS, &item.Provider, &item.InputTokens, &item.OutputTokens, &item.TotalTokens}
+	return []any{&item.Sequence, &item.ID, &item.UserID, &item.KeyID, &item.At, &item.Method, &item.Path, &item.Model, &item.StatusCode, &item.DurationMS, &item.Provider, &item.InputTokens, &item.OutputTokens, &item.TotalTokens, &item.PromptPreview, &item.SessionID, &item.SessionSource, &item.PreviousResponseID, &item.ResponseID, &item.CaptureState, &item.RequestContentBytes, &item.ResponseContentBytes}
 }
 
 func (s *Store) ListRequestActivity(ctx context.Context, userID string, limit int, before int64, since time.Time) ([]RequestActivitySummary, error) {
@@ -95,14 +104,14 @@ func (s *Store) ListRequestActivityFiltered(ctx context.Context, userID string, 
 
 func (s *Store) GetRequestActivity(ctx context.Context, id string, since time.Time) (RequestActivity, error) {
 	var item RequestActivity
-	targets := append(requestActivityScanTargets(&item.RequestActivitySummary), &item.BodyPreview, &item.BodyTruncated, &item.BodyOmittedReason)
-	errScan := s.query().QueryRowContext(ctx, `SELECT `+requestActivityColumns+`,body_preview,body_truncated,body_omitted_reason FROM cpa_request_activity WHERE id=$1 AND at >= $2`, id, since).Scan(targets...)
+	targets := append(requestActivityScanTargets(&item.RequestActivitySummary), &item.BodyPreview, &item.BodyTruncated, &item.BodyOmittedReason, &item.ResponsePreview)
+	errScan := s.query().QueryRowContext(ctx, `SELECT `+requestActivityColumns+`,body_preview,body_truncated,body_omitted_reason,response_preview FROM cpa_request_activity WHERE id=$1 AND at >= $2`, id, since).Scan(targets...)
 	return item, domainError("read request activity", errScan)
 }
 
 // DeleteExpiredRequestActivity limits each transaction to avoid long table locks.
 func (s *Store) DeleteExpiredRequestActivity(ctx context.Context, before time.Time) (int64, error) {
-	result, errDelete := s.query().ExecContext(ctx, `DELETE FROM cpa_request_activity WHERE sequence IN (SELECT sequence FROM cpa_request_activity WHERE at<$1 ORDER BY at LIMIT 1000)`, before)
+	result, errDelete := s.query().ExecContext(ctx, `DELETE FROM cpa_request_activity WHERE sequence IN (SELECT sequence FROM cpa_request_activity WHERE at<$1 AND capture_state='legacy_preview' ORDER BY at LIMIT 1000)`, before)
 	if errDelete != nil {
 		return 0, domainError("expire request activity", errDelete)
 	}

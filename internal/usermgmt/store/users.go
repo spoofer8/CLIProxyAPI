@@ -22,6 +22,7 @@ type User struct {
 	DisplayName       string    `json:"display_name"`
 	Role              string    `json:"role"`
 	Status            string    `json:"status"`
+	SystemAdmin       bool      `json:"system_admin"`
 	MonthlyTokenLimit *int64    `json:"monthly_token_limit"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
@@ -35,13 +36,13 @@ type UserPatch struct {
 	MonthlyTokenLimit    *int64
 }
 
-const userColumns = `id, email, display_name, role, status, monthly_token_limit, created_at, updated_at`
+const userColumns = `id, email, display_name, role, status, system_admin, monthly_token_limit, created_at, updated_at`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanUser(row rowScanner) (User, error) {
 	var user User
-	errScan := row.Scan(&user.ID, &user.Email, &user.DisplayName, &user.Role, &user.Status, &user.MonthlyTokenLimit, &user.CreatedAt, &user.UpdatedAt)
+	errScan := row.Scan(&user.ID, &user.Email, &user.DisplayName, &user.Role, &user.Status, &user.SystemAdmin, &user.MonthlyTokenLimit, &user.CreatedAt, &user.UpdatedAt)
 	return user, domainError("read user", errScan)
 }
 
@@ -98,6 +99,13 @@ func (s *Store) ListUsers(ctx context.Context, limit, offset int) ([]User, int64
 func (s *Store) UpdateUser(ctx context.Context, id string, patch UserPatch) (User, error) {
 	var updated User
 	errUpdate := s.Transaction(ctx, func(txStore *Store) error {
+		current, errCurrent := scanUser(txStore.query().QueryRowContext(ctx, `SELECT `+userColumns+` FROM cpa_users WHERE id=$1 FOR UPDATE`, id))
+		if errCurrent != nil {
+			return errCurrent
+		}
+		if current.SystemAdmin && ((patch.Role != nil && *patch.Role != "admin") || (patch.Status != nil && *patch.Status != "active")) {
+			return ErrSystemAdminProtected
+		}
 		var errScan error
 		updated, errScan = scanUser(txStore.query().QueryRowContext(ctx, `UPDATE cpa_users SET
 		display_name=COALESCE($2,display_name), role=COALESCE($3,role), status=COALESCE($4,status),
@@ -116,7 +124,10 @@ func (s *Store) UpdateUser(ctx context.Context, id string, patch UserPatch) (Use
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id string) error {
-	result, errDelete := s.query().ExecContext(ctx, `DELETE FROM cpa_users WHERE id=$1`, id)
+	if id == SystemAdminUserID {
+		return ErrSystemAdminProtected
+	}
+	result, errDelete := s.query().ExecContext(ctx, `DELETE FROM cpa_users WHERE id=$1 AND NOT system_admin`, id)
 	if errDelete != nil {
 		return domainError("delete user", errDelete)
 	}

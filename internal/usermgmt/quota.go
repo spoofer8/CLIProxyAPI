@@ -3,8 +3,8 @@ package usermgmt
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -17,12 +17,14 @@ const quotaCacheTTL = 2 * time.Second
 type QuotaError struct {
 	Status  int
 	Body    []byte
+	Headers http.Header
 	message string
 }
 
-func (e *QuotaError) Error() string        { return e.message }
-func (e *QuotaError) StatusCode() int      { return e.Status }
-func (e *QuotaError) ResponseBody() []byte { return append([]byte(nil), e.Body...) }
+func (e *QuotaError) ResponseHeaders() http.Header { return e.Headers.Clone() }
+func (e *QuotaError) Error() string                { return e.message }
+func (e *QuotaError) StatusCode() int              { return e.Status }
+func (e *QuotaError) ResponseBody() []byte         { return append([]byte(nil), e.Body...) }
 
 func quotaError(status int, message, kind, code string) *QuotaError {
 	body, _ := json.Marshal(map[string]any{"error": map[string]string{"message": message, "type": kind, "code": code}})
@@ -96,9 +98,8 @@ func (q *quotaCache) get(ctx context.Context, db *store.Store, userID, period st
 	return entry, nil
 }
 
-// CheckQuota is called before each logical upstream execution, including each
-// Responses WebSocket frame. Legacy principals bypass it. Calendar months and
-// reset dates are UTC; <=0 effective limits and enforce:false never reject.
+// CheckQuota evaluates exact committed USD spending for each logical request.
+// The previous token settings remain readable historical configuration only.
 func (r *Runtime) CheckQuota(ctx context.Context) *QuotaError {
 	identity, exists := sdkaccess.ResultFromContext(ctx)
 	if !exists || identity.Provider != AccessProviderName {
@@ -107,45 +108,51 @@ func (r *Runtime) CheckQuota(ctx context.Context) *QuotaError {
 	if r == nil {
 		return unavailableScopeError()
 	}
-	release, errLease := r.BeginRequest(ctx)
-	if errLease != nil {
+	release, err := r.BeginRequest(ctx)
+	if err != nil {
 		return unavailableScopeError()
 	}
 	defer release()
 	r.mu.RLock()
 	scope := r.scopes[identity.Metadata[UsageScopeMetadataKey]]
-	if scope == nil {
-		r.mu.RUnlock()
-		return unavailableScopeError()
-	}
-	cfg := scope.cfg
 	r.mu.RUnlock()
-	if !cfg.Quota.Enforce {
-		return nil
-	}
-	// The lease keeps the selected store alive without holding the runtime
-	// mutex across a database read. Forced cleanup cancels that read as well.
-	queryCtx, cancel := context.WithCancel(ctx)
-	stopCleanup := context.AfterFunc(scope.cleanupCtx, cancel)
-	defer func() { stopCleanup(); cancel() }()
-	now := scope.accountant.quota.timeNow().UTC()
-	period := now.Format("2006-01")
-	snapshot, errSnapshot := scope.accountant.quota.get(queryCtx, scope.store, identity.Principal, period)
-	if errSnapshot != nil {
-		return quotaError(http.StatusServiceUnavailable, "Monthly usage is temporarily unavailable", "server_error", "usage_unavailable")
-	}
-	if snapshot.user.Status != "active" {
+	if scope == nil {
 		return unavailableScopeError()
 	}
-	limit := cfg.Quota.DefaultMonthlyTokens
-	if snapshot.user.MonthlyTokenLimit != nil {
-		limit = *snapshot.user.MonthlyTokenLimit
-	}
-	if limit <= 0 || snapshot.total < limit {
+	// Middleware admits a logical request once. Later SDK producer/retry checks
+	// must allow that accepted request to finish despite concurrent expenditure.
+	if r.capturedBudgetAdmitted(ctx, scope) {
 		return nil
 	}
-	reset := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
-	return quotaError(http.StatusTooManyRequests,
-		fmt.Sprintf("Monthly token quota exceeded (%d tokens). Resets %s.", limit, reset),
-		"insufficient_quota", "quota_exceeded")
+	status, e := r.budgetStatus(ctx, scope, identity.Principal, scope.accountant.quota.timeNow())
+	if e != nil {
+		return quotaError(http.StatusServiceUnavailable, "Cost accounting is unavailable. New requests are blocked until accounting recovers.", "server_error", "accounting_unavailable")
+	}
+	if r.capturedBudgetAdmitted(ctx, scope) {
+		return nil
+	}
+	if !status.Blocked {
+		r.admitCapturedBudget(ctx, scope)
+		return nil
+	}
+	message := "Spending budget exhausted."
+	code := "budget_exceeded"
+	if status.UnresolvedRequests > 0 {
+		message = "A previous request has unresolved cost accounting. An administrator must resolve its cost before new requests are accepted."
+		code = "accounting_unresolved"
+	} else if status.RequiresAdminAction {
+		message += " An administrator must raise the limit."
+	} else if status.AvailableAt != nil {
+		message += " Available again at " + status.AvailableAt.Format(time.RFC3339) + "."
+	}
+	body, _ := json.Marshal(map[string]any{"error": map[string]any{"message": message, "type": "insufficient_quota", "code": code, "currency": "USD", "available_at": status.AvailableAt, "requires_admin_action": status.RequiresAdminAction, "blocking_limits": status.BlockingLimits, "daily_resets_at": status.DailyResetsAt}})
+	result := &QuotaError{Status: http.StatusTooManyRequests, Body: body, message: message}
+	if status.AvailableAt != nil {
+		seconds := int64((status.AvailableAt.Sub(scope.accountant.quota.timeNow()) + time.Second - 1) / time.Second)
+		if seconds < 1 {
+			seconds = 1
+		}
+		result.Headers = http.Header{"Retry-After": []string{strconv.FormatInt(seconds, 10)}}
+	}
+	return result
 }

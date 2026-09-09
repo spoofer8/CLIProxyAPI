@@ -62,18 +62,19 @@ func (s *Store) RevokeKey(ctx context.Context, id string) (APIKey, error) {
 
 // KeyIdentity is only populated for active keys belonging to active users.
 type KeyIdentity struct {
-	UserID string
-	Email  string
-	Role   string
-	KeyID  string
+	UserID      string
+	Email       string
+	Role        string
+	KeyID       string
+	SystemAdmin bool
 }
 
 func (s *Store) LookupActiveKey(ctx context.Context, hash string) (KeyIdentity, error) {
 	var identity KeyIdentity
-	errQuery := s.query().QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id
+	errQuery := s.query().QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id,u.system_admin
 		FROM cpa_user_api_keys k JOIN cpa_users u ON u.id=k.user_id
 		WHERE k.key_hash=$1 AND k.status='active' AND k.revoked_at IS NULL AND u.status='active'`, hash).
-		Scan(&identity.UserID, &identity.Email, &identity.Role, &identity.KeyID)
+		Scan(&identity.UserID, &identity.Email, &identity.Role, &identity.KeyID, &identity.SystemAdmin)
 	return identity, domainError("authenticate API key", errQuery)
 }
 
@@ -82,10 +83,10 @@ func (s *Store) LookupActiveKey(ctx context.Context, hash string) (KeyIdentity, 
 // must still match, including for subsequent frames on an existing WebSocket.
 func (s *Store) LookupActiveKeyIdentity(ctx context.Context, userID, keyID string) (KeyIdentity, error) {
 	var identity KeyIdentity
-	errQuery := s.query().QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id
+	errQuery := s.query().QueryRowContext(ctx, `SELECT u.id,u.email,u.role,k.id,u.system_admin
 		FROM cpa_user_api_keys k JOIN cpa_users u ON u.id=k.user_id
 		WHERE u.id=$1 AND k.id=$2 AND k.status='active' AND k.revoked_at IS NULL AND u.status='active'`, userID, keyID).
-		Scan(&identity.UserID, &identity.Email, &identity.Role, &identity.KeyID)
+		Scan(&identity.UserID, &identity.Email, &identity.Role, &identity.KeyID, &identity.SystemAdmin)
 	return identity, domainError("revalidate API key", errQuery)
 }
 

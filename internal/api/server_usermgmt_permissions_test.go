@@ -23,6 +23,7 @@ import (
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -30,22 +31,35 @@ type permissionHTTPExecutor struct {
 	coreauth.ProviderExecutor
 	provider string
 	calls    atomic.Int64
+	runtime  *usermgmt.Runtime
 }
 
 func (e *permissionHTTPExecutor) Identifier() string { return e.provider }
-func (e *permissionHTTPExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+func (e *permissionHTTPExecutor) Execute(ctx context.Context, _ *coreauth.Auth, request coreexecutor.Request, _ coreexecutor.Options) (coreexecutor.Response, error) {
 	e.calls.Add(1)
+	e.reportUsage(ctx, request.Model)
 	return coreexecutor.Response{Payload: []byte(`{"id":"resp_policy","object":"response","output":[]}`)}, nil
 }
-func (e *permissionHTTPExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+func (e *permissionHTTPExecutor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, request coreexecutor.Request, _ coreexecutor.Options) (*coreexecutor.StreamResult, error) {
 	e.calls.Add(1)
+	e.reportUsage(ctx, request.Model)
 	chunks := make(chan coreexecutor.StreamChunk, 1)
 	chunks <- coreexecutor.StreamChunk{Payload: []byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_policy\",\"output\":[]}}\n\n")}
 	close(chunks)
 	return &coreexecutor.StreamResult{Chunks: chunks}, nil
 }
 
+func (e *permissionHTTPExecutor) reportUsage(ctx context.Context, model string) {
+	if e.runtime == nil {
+		return
+	}
+	db, _ := e.runtime.Snapshot()
+	_ = db.SavePrice(context.Background(), store.ModelPrice{ID: "permission-fixture-" + e.provider + "-" + model, Provider: e.provider, Model: model, PriceRates: store.PriceRates{InputUSD: "1", OutputUSD: "1"}, Manual: true, UpdatedAt: time.Now().Add(-time.Minute)})
+	e.runtime.HandleUsage(ctx, usage.Record{Provider: e.provider, Model: model, RequestedAt: time.Now(), Detail: usage.Detail{InputTokens: 1, OutputTokens: 1, TotalTokens: 2, TokenBreakdown: usage.NewSubsetTokenBreakdown(1, 0, 0, 1, 0, 2)}})
+}
+
 func TestUserPermissionsHTTPAliasesListingsAndLiveWebsocketUpdate(t *testing.T) {
+	spoolDirectory := t.TempDir()
 	dsn := userManagementHTTPTestDSN(t)
 	preserveConfigAccessProvider(t)
 	var runtime usermgmt.Runtime
@@ -64,7 +78,7 @@ func TestUserPermissionsHTTPAliasesListingsAndLiveWebsocketUpdate(t *testing.T) 
 	cfg := &config.Config{AuthDir: t.TempDir(), CommercialMode: true}
 	cfg.APIKeys = []string{"permission-legacy-key"}
 	cfg.RemoteManagement.SecretKey = string(hash)
-	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn}
+	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn, RequestActivity: config.UserManagementRequestActivityConfig{SpoolDirectory: spoolDirectory}}
 	cfg.OpenAICompatibility = []config.OpenAICompatibility{{Name: "azure-openai", Models: []config.OpenAICompatibilityModel{{Name: "deployment-internal", Alias: "azure-visible"}}}}
 	if err := runtime.Apply(context.Background(), cfg.UserManagement); err != nil {
 		t.Fatal(err)
@@ -89,6 +103,7 @@ func TestUserPermissionsHTTPAliasesListingsAndLiveWebsocketUpdate(t *testing.T) 
 		{"permission-other-auth", "other-provider", []string{"azure-visible", "claude-visible"}, denied},
 		{"permission-gemini-auth", "gemini", []string{"team/gemini-visible"}, &permissionHTTPExecutor{provider: "gemini"}},
 	} {
+		entry.executor.runtime = &runtime
 		authManager.RegisterExecutor(entry.executor)
 		attributes := map[string]string{"api_key": "fake-upstream-key"}
 		if entry.provider == azure {

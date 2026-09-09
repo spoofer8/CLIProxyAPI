@@ -18,7 +18,7 @@ func (r *Runtime) AccessProvider() sdkaccess.Provider {
 	if r == nil {
 		return nil
 	}
-	if active, _ := r.Snapshot(); active == nil {
+	if active, _ := r.Snapshot(); active == nil && r.configuredAdminSnapshot() == nil {
 		return nil
 	}
 	return &userAccessProvider{runtime: r}
@@ -35,7 +35,8 @@ func (p *userAccessProvider) Authenticate(ctx context.Context, request *http.Req
 	p.runtime.mu.RLock()
 	state := p.runtime.auth
 	p.runtime.mu.RUnlock()
-	if state == nil {
+	configured := p.runtime.configuredAdminSnapshot()
+	if state == nil && configured == nil {
 		return nil, sdkaccess.NewNotHandledError()
 	}
 	if request == nil {
@@ -68,9 +69,12 @@ func (p *userAccessProvider) Authenticate(ctx context.Context, request *http.Req
 			continue
 		}
 		present = true
+		if configuredAdminMatches(configured, candidate.value) {
+			return p.runtime.configuredAdminResult(ctx, state, configured, candidate.source)
+		}
 		// Legacy keys cannot have been issued by this service. Avoid a DB lookup
 		// for them, so their fallback remains independent of database outages.
-		if !strings.HasPrefix(candidate.value, "sk-cpa-") {
+		if state == nil || !strings.HasPrefix(candidate.value, "sk-cpa-") {
 			continue
 		}
 		digest := sha256.Sum256([]byte(candidate.value))
@@ -78,17 +82,27 @@ func (p *userAccessProvider) Authenticate(ctx context.Context, request *http.Req
 		if errLookup != nil {
 			continue
 		}
-		return &sdkaccess.Result{
+		result := &sdkaccess.Result{
 			Provider: AccessProviderName, Principal: identity.UserID,
 			Metadata: map[string]string{
 				UsageScopeMetadataKey: state.scopeID,
 				"user_email":          identity.Email, "key_id": identity.KeyID,
 				"role": identity.Role, "source": candidate.source,
 			},
-		}, nil
+		}
+		if identity.SystemAdmin {
+			result.Metadata["system_admin"] = "true"
+			result.SystemAdmin = true
+		}
+		return result, nil
 	}
 	if !present {
 		return nil, sdkaccess.NewNoCredentialsError()
+	}
+	if configured != nil {
+		// There are no additional configured legacy credentials. Never let a
+		// stale config provider accept a rotated/rejected key without tracking.
+		return nil, sdkaccess.NewRejectedCredentialError()
 	}
 	// InvalidCredential allows the manager to continue to legacy config keys.
 	return nil, sdkaccess.NewInvalidCredentialError()

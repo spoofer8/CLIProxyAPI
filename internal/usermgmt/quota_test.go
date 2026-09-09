@@ -17,73 +17,46 @@ func setQuotaClock(scope *usageScope, now time.Time) {
 	scope.accountant.quota.mu.Unlock()
 }
 
-func TestQuotaModesUTCResetAndLegacyBypass(t *testing.T) {
+func TestTokenQuotaSettingsDoNotEnforceDollarBudgets(t *testing.T) {
 	runtime, engine, _ := testRuntime(t)
 	user, _, key := createTestIdentity(t, engine)
 	ctx := usageContext(t, runtime, key)
-	_, cfg := runtime.Snapshot()
+	db, cfg := runtime.Snapshot()
 	cfg.Quota.Enforce = true
-	cfg.Quota.DefaultMonthlyTokens = 50
-	if errApply := runtime.Apply(context.Background(), cfg); errApply != nil {
-		t.Fatal(errApply)
+	cfg.Quota.DefaultMonthlyTokens = 1
+	if e := runtime.Apply(context.Background(), cfg); e != nil {
+		t.Fatal(e)
 	}
-	scope := runtime.current
-	now := time.Date(2026, 9, 30, 23, 59, 0, 0, time.UTC)
-	setQuotaClock(scope, now)
-	if quotaErr := runtime.CheckQuota(ctx); quotaErr != nil {
-		t.Fatal(quotaErr)
+	runtime.HandleUsage(ctx, usage.Record{Detail: usage.Detail{TotalTokens: 1000000}})
+	if e := runtime.FlushUsage(context.Background()); e != nil {
+		t.Fatal(e)
 	}
-	runtime.HandleUsage(ctx, usage.Record{RequestedAt: now, Detail: usage.Detail{TotalTokens: 99}})
-	if errFlush := runtime.FlushUsage(context.Background()); errFlush != nil {
-		t.Fatal(errFlush)
+	if e := runtime.CheckQuota(ctx); e != nil {
+		t.Fatal("historical token settings must not enforce cost budgets", e)
 	}
-	if quotaErr := runtime.CheckQuota(ctx); quotaErr != nil {
-		t.Fatal("under-limit request rejected")
+	now := time.Now()
+	if e := db.SetBudget(context.Background(), user.ID, store.BudgetLimits{LifetimeUSD: usd("1")}); e != nil {
+		t.Fatal(e)
 	}
-	runtime.HandleUsage(ctx, usage.Record{RequestedAt: now, Detail: usage.Detail{TotalTokens: 1}})
-	if errFlush := runtime.FlushUsage(context.Background()); errFlush != nil {
-		t.Fatal(errFlush)
+	if e := db.BeginFinancialRequest(context.Background(), "charged", user.ID, "model", now); e != nil {
+		t.Fatal(e)
 	}
-	quotaErr := runtime.CheckQuota(ctx)
-	if quotaErr == nil || quotaErr.StatusCode() != http.StatusTooManyRequests || !stringsContainAll(string(quotaErr.ResponseBody()), "quota_exceeded", "insufficient_quota", "2026-10-01") {
-		t.Fatalf("missing quota error shape/reset: %v", quotaErr)
+	if e := db.RecordCostEvent(context.Background(), store.CostEvent{ID: "charge", RequestID: "charged", UserID: user.ID, At: now, CostUSD: usd("1"), Status: "priced"}); e != nil {
+		t.Fatal(e)
+	}
+	if e := db.FinishFinancialRequest(context.Background(), "charged", 200); e != nil {
+		t.Fatal(e)
+	}
+	cfg.Quota.Enforce = false
+	if e := runtime.Apply(context.Background(), cfg); e != nil {
+		t.Fatal(e)
+	}
+	if e := runtime.CheckQuota(ctx); e == nil || !stringsContainAll(string(e.Body), "budget_exceeded", "requires_admin_action") {
+		t.Fatal("old token enforce:false must not bypass explicitly configured dollars", e)
 	}
 	legacy := sdkaccess.WithResult(context.Background(), &sdkaccess.Result{Provider: "config", Principal: user.ID})
 	if runtime.CheckQuota(legacy) != nil {
-		t.Fatal("legacy admin principal did not bypass quota")
-	}
-	for _, patch := range []string{`{"monthly_token_limit":0}`, `{"monthly_token_limit":-1}`} {
-		requestJSON(t, engine, http.MethodPatch, "/users/"+user.ID, patch, http.StatusOK)
-		if runtime.CheckQuota(ctx) != nil {
-			t.Fatal("explicit unlimited limit was rejected")
-		}
-	}
-	requestJSON(t, engine, http.MethodPatch, "/users/"+user.ID, `{"monthly_token_limit":null}`, http.StatusOK)
-	if runtime.CheckQuota(ctx) == nil {
-		t.Fatal("null quota did not inherit configured default")
-	}
-	cfg.Quota.DefaultMonthlyTokens = 0
-	if errApply := runtime.Apply(context.Background(), cfg); errApply != nil {
-		t.Fatal(errApply)
-	}
-	if runtime.CheckQuota(ctx) != nil {
-		t.Fatal("zero default did not mean unlimited")
-	}
-	cfg.Quota.DefaultMonthlyTokens, cfg.Quota.Enforce = 1, false
-	if errApply := runtime.Apply(context.Background(), cfg); errApply != nil {
-		t.Fatal(errApply)
-	}
-	if runtime.CheckQuota(ctx) != nil {
-		t.Fatal("enforce:false rejected existing usage")
-	}
-	cfg.Quota.Enforce = true
-	if errApply := runtime.Apply(context.Background(), cfg); errApply != nil {
-		t.Fatal(errApply)
-	}
-	// It is still September in this offset, but the UTC quota period is October.
-	setQuotaClock(scope, time.Date(2026, 9, 30, 20, 0, 0, 0, time.FixedZone("UTC-7", -7*3600)))
-	if runtime.CheckQuota(ctx) != nil {
-		t.Fatal("quota did not reset at UTC calendar boundary")
+		t.Fatal("unattributed external identities must not assume user rows")
 	}
 }
 

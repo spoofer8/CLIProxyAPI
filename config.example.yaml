@@ -41,15 +41,16 @@ user-management:
   # A full DSN can also be supplied as "${CLIPROXY_USERMGMT_DSN}".
   dsn: "postgres://cliproxy:CHANGEME@127.0.0.1:5432/cliproxy?sslmode=disable"
   quota:
-    default-monthly-tokens: 2000000 # 0 or omitted = unlimited
-    enforce: false # Verify accounting for the first week before enabling rejection.
+    default-monthly-tokens: 0 # Compatibility only; USD budgets replace token limits.
+    enforce: false # Compatibility only; set per-user USD budgets in the management panel.
   session:
     ttl: "12h"
   cache:
     ttl: "30s"
   request-activity:
-    enabled: true # Record sanitized request content for named user API keys.
-    retention-days: 7 # Admin-only history; expired content is hidden and removed.
+    enabled: true # Compatibility only; durable capture is mandatory for managed requests.
+    retention-days: 0 # Full request/response text is retained indefinitely, regardless of this legacy value.
+    spool-directory: "./activity-spool" # Durable encrypted recovery journal; preserve with its private key.
 
 # Authentication directory (supports ~ for home directory)
 auth-dir: "~/.cli-proxy-api"

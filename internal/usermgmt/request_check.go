@@ -28,11 +28,26 @@ func (r *Runtime) CheckRequest(ctx context.Context) error {
 	if scope == nil {
 		return unavailableScopeError()
 	}
+	if admission, ok := r.capturedAdmission(ctx, scope); ok && admission.admitted && admission.identityValidated {
+		return nil
+	}
 	queryCtx, cancel := context.WithCancel(ctx)
 	stopCleanup := context.AfterFunc(scope.cleanupCtx, cancel)
 	defer func() { stopCleanup(); cancel() }()
-	if _, errIdentity := scope.auth.validateIdentity(queryCtx, identity.Principal, identity.Metadata["key_id"]); errIdentity != nil {
+	confirmed, errIdentity := r.validateRequestIdentity(queryCtx, scope, identity)
+	if errIdentity != nil {
 		return unavailableScopeError()
+	}
+	if admission, exists := r.capturedAdmission(ctx, scope); exists && !admission.identityValidated {
+		var permissions *compiledPermissions
+		if !confirmed.SystemAdmin {
+			var errPermissions error
+			permissions, errPermissions = scope.permissions.get(queryCtx, identity.Principal)
+			if errPermissions != nil {
+				return quotaError(503, "Account permissions are temporarily unavailable", "server_error", "permissions_unavailable")
+			}
+		}
+		r.snapshotCapturedPolicy(ctx, scope, permissions)
 	}
 	if quotaErr := r.CheckQuota(ctx); quotaErr != nil {
 		return quotaErr

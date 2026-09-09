@@ -353,7 +353,7 @@ func isKnownDefaultValue(path []string, node *yaml.Node) bool {
 		case "error-logs-max-files":
 			return node.Value == "10"
 		case "user-management.request-activity.retention-days":
-			return node.Value == "7"
+			return node.Value == "0"
 		}
 	}
 

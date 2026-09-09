@@ -13,33 +13,48 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// requestCaptureReader observes only bytes consumed by the existing handler.
-// It never drains a rejected request or changes the data seen by the proxy.
+// The tee writes durable encrypted frames and never imposes a text length cap.
 type requestCaptureReader struct {
 	io.ReadCloser
-	preview  []byte
-	overflow bool
+	capture func([]byte) error
 }
 
 func (r *requestCaptureReader) Read(p []byte) (int, error) {
-	n, errRead := r.ReadCloser.Read(p)
-	if n > 0 {
-		remaining := usermgmt.MaxRequestCaptureInspectBytes - len(r.preview)
-		if n > remaining {
-			r.overflow = true
-		}
-		if remaining > 0 {
-			r.preview = append(r.preview, p[:min(n, remaining)]...)
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 && r.capture != nil {
+		if errCapture := r.capture(p[:n]); errCapture != nil {
+			return n, errCapture
 		}
 	}
-	return n, errRead
+	return n, err
 }
+
+type activityResponseWriter struct {
+	gin.ResponseWriter
+	capture func([]byte, string) error
+	failed  bool
+}
+
+func (w *activityResponseWriter) Write(body []byte) (int, error) {
+	format := "json"
+	if strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+		format = "sse"
+	}
+	if err := w.capture(body, format); err != nil {
+		w.failed = true
+		return 0, err
+	}
+	n, err := w.ResponseWriter.Write(body)
+	if err != nil {
+		w.failed = true
+	}
+	return n, err
+}
+func (w *activityResponseWriter) WriteString(text string) (int, error) { return w.Write([]byte(text)) }
 
 func capturedWebsocketRequest(request *http.Request) bool {
-	return request.Method == http.MethodGet && websocket.IsWebSocketUpgrade(request) &&
-		(request.URL.Path == "/v1/responses" || request.URL.Path == "/backend-api/codex/responses")
+	return request.Method == http.MethodGet && websocket.IsWebSocketUpgrade(request) && (request.URL.Path == "/v1/responses" || request.URL.Path == "/backend-api/codex/responses")
 }
-
 func requestCaptureModel(body []byte, path string) string {
 	if model := gjson.GetBytes(body, "model").String(); model != "" {
 		return model
@@ -50,57 +65,67 @@ func requestCaptureModel(body []byte, path string) string {
 	}
 	return ""
 }
-
+func reliableActivitySession(headers http.Header) (string, string) {
+	if metadata := headers.Get("X-Codex-Turn-Metadata"); metadata != "" {
+		value := gjson.Get(metadata, "session_id")
+		if value.Type == gjson.String && value.String() != "" && len(value.String()) <= 512 && !strings.ContainsAny(value.String(), "\r\n\x00") {
+			return value.String(), "header:x-codex-turn-metadata.session_id"
+		}
+	}
+	// Deliberately excludes request IDs, cache keys, user IDs, and affinity hints.
+	for _, key := range []string{"X-Claude-Code-Session-Id", "Session-Id", "Session_id", "X-Http-Session-Id", "X-Session-Id", "X-Conversation-Id", "X-Thread-Id"} {
+		value := headers.Get(key)
+		if value != "" && len(value) <= 512 && !strings.ContainsAny(value, "\r\n\x00") {
+			return value, "header:" + strings.ToLower(key)
+		}
+	}
+	return "", ""
+}
 func (s *Server) attachUserRequestCapture(c *gin.Context, hooks *sdkaccess.RequestHooks) {
 	hooks.CopyContext = usermgmt.CopyRequestCaptureContext
-	path := c.Request.URL.Path // Never retain query credentials or HTTP headers.
-	hooks.Capture = func(ctx context.Context, model string, body []byte) (context.Context, func(int)) {
-		metadata := usermgmt.RequestCaptureMetadata{Method: "WS", Path: path, Model: model}
-		if len(body) > usermgmt.MaxRequestCaptureInspectBytes {
-			metadata.BodyOmittedReason = "inspection_limit"
-		} else {
-			metadata.Body = body
-		}
-		capturedCtx, finish := s.userManagement.BeginRequestCapture(ctx, metadata)
-		return capturedCtx, func(status int) {
-			finish(usermgmt.RequestCaptureResult{StatusCode: status})
-		}
+	hooks.CaptureContent = s.userManagement.RecordCapturedContent
+	hooks.CompleteNonGenerating = s.userManagement.CompleteNonGeneratingRequest
+	path := c.Request.URL.Path
+	sessionID, sessionSource := reliableActivitySession(c.Request.Header)
+	hooks.CaptureDurable = func(ctx context.Context, model string, body []byte) (context.Context, func(int), error) {
+		captured, finish, err := s.userManagement.BeginDurableRequestCapture(ctx, usermgmt.RequestCaptureMetadata{Method: "WS", Path: path, Model: model, Body: body, SessionID: sessionID, SessionSource: sessionSource})
+		return captured, func(status int) { finish(usermgmt.RequestCaptureResult{StatusCode: status}) }, err
 	}
 }
-
-func (s *Server) beginUserHTTPRequestCapture(c *gin.Context) func() {
-	_, cfg := s.userManagement.Snapshot()
-	if !cfg.RequestActivity.CaptureEnabled() {
-		return func() {}
-	}
+func (s *Server) beginUserHTTPRequestCapture(c *gin.Context) (func(), error) {
 	if capturedWebsocketRequest(c.Request) {
-		// Each original frame has its own identity and lifecycle below the upgrade.
-		return func() {}
+		return func() {}, nil
 	}
 	path := c.Request.URL.Path
-	ctx, finish := s.userManagement.BeginRequestCapture(c.Request.Context(), usermgmt.RequestCaptureMetadata{
-		Method: c.Request.Method, Path: path, Model: requestCaptureModel(nil, path),
-	})
-	c.Request = c.Request.WithContext(ctx)
-	var reader *requestCaptureReader
-	if c.Request.Body != nil && c.Request.Body != http.NoBody {
-		reader = &requestCaptureReader{ReadCloser: c.Request.Body}
-		c.Request.Body = reader
+	sessionID, sessionSource := reliableActivitySession(c.Request.Header)
+	ctx, finish, err := s.userManagement.BeginDurableRequestCapture(c.Request.Context(), usermgmt.RequestCaptureMetadata{Method: c.Request.Method, Path: path, Model: requestCaptureModel(nil, path), SessionID: sessionID, SessionSource: sessionSource})
+	if err != nil {
+		return func() {}, err
 	}
+	c.Request = c.Request.WithContext(ctx)
+	if c.Request.Body != nil && c.Request.Body != http.NoBody {
+		format := "raw"
+		switch strings.ToLower(strings.TrimSpace(c.Request.Header.Get("Content-Encoding"))) {
+		case "zstd":
+			format = "zstd"
+		case "gzip":
+			format = "gzip"
+		}
+		c.Request.Body = &requestCaptureReader{ReadCloser: c.Request.Body, capture: func(body []byte) error {
+			return s.userManagement.RecordCapturedContent(ctx, "request_raw", format, body)
+		}}
+	}
+	writer := &activityResponseWriter{ResponseWriter: c.Writer, capture: func(body []byte, format string) error {
+		return s.userManagement.RecordCapturedContent(ctx, "response", format, body)
+	}}
+	c.Writer = writer
 	return func() {
-		result := usermgmt.RequestCaptureResult{StatusCode: c.Writer.Status(), BodyOmittedReason: "empty_body"}
-		if reader != nil {
-			switch {
-			case reader.overflow:
-				result.BodyOmittedReason = "inspection_limit"
-			case len(reader.preview) == 0 && c.Request.ContentLength != 0:
-				result.BodyOmittedReason = "body_not_read"
-			default:
-				result.Body = reader.preview
-				result.BodyOmittedReason = ""
-				result.Model = requestCaptureModel(reader.preview, path)
+		status := c.Writer.Status()
+		if writer.failed || c.Request.Context().Err() != nil {
+			if status < 400 {
+				status = 499
 			}
 		}
-		finish(result)
-	}
+		finish(usermgmt.RequestCaptureResult{StatusCode: status})
+	}, nil
 }

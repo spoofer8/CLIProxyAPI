@@ -13,6 +13,12 @@ type RequestHooks struct {
 	CopyContext func(context.Context, context.Context) context.Context
 	// Capture records an original WebSocket turn and returns its completion callback.
 	Capture func(context.Context, string, []byte) (context.Context, func(int))
+	// CaptureDurable must complete admission before the transport forwards a turn.
+	CaptureDurable func(context.Context, string, []byte) (context.Context, func(int), error)
+	// CaptureContent journals decoded request text and original response frames.
+	CaptureContent func(context.Context, string, string, []byte) error
+	// CompleteNonGenerating is called only for a locally handled no-generation turn.
+	CompleteNonGenerating func(context.Context) error
 }
 
 // PolicyTarget distinguishes client-visible model names from names rewritten

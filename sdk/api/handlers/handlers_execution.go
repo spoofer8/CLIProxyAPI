@@ -382,6 +382,15 @@ func executionErrorMessage(err error) *interfaces.ErrorMessage {
 			}
 			headers = http.Header{"Content-Type": []string{contentType}}
 		}
+		var responseHeaders interface{ ResponseHeaders() http.Header }
+		if errors.As(err, &responseHeaders) {
+			if headers == nil {
+				headers = make(http.Header)
+			}
+			for key, values := range responseHeaders.ResponseHeaders() {
+				headers[key] = append([]string(nil), values...)
+			}
+		}
 		return &interfaces.ErrorMessage{
 			StatusCode:     status,
 			Error:          err,

@@ -102,7 +102,10 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	if _, errLock := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(1129333077)`); errLock != nil {
 		return operationError("lock schema bootstrap", errLock)
 	}
-	for _, statement := range schemaStatements {
+	statements := append(append([]string(nil), schemaStatements...), financialSchemaStatements...)
+	statements = append(statements, SystemAdminSchemaStatements...)
+	statements = append(statements, requestActivitySchemaStatements...)
+	for _, statement := range statements {
 		if _, errSchema := tx.ExecContext(ctx, statement); errSchema != nil {
 			return operationError("create schema", errSchema)
 		}

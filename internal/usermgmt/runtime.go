@@ -19,45 +19,52 @@ import (
 // disabled and creates no connections or workers. Future request handlers should
 // obtain the current store from Snapshot instead of retaining a replaced store.
 type Runtime struct {
-	applyMu        sync.Mutex
-	mu             sync.RWMutex
-	store          *store.Store
-	auth           *authState
-	cfg            config.UserManagementConfig
-	dsn            string
-	closed         bool
-	current        *usageScope
-	scopes         map[string]*usageScope
-	usageFlusher   func(context.Context) error
-	lifetimeOnce   sync.Once
-	lifetimeCtx    context.Context
-	cancelLifetime context.CancelFunc
-	shutdownOnce   sync.Once
-	shutdownDone   chan struct{}
-	abortShutdown  chan struct{}
-	abortOnce      sync.Once
-	invalidKeys    invalidKeyLimiter
-	loginGuardMu   sync.RWMutex
-	loginGuard     ManagementLoginGuard
+	applyMu          sync.Mutex
+	mu               sync.RWMutex
+	store            *store.Store
+	auth             *authState
+	cfg              config.UserManagementConfig
+	dsn              string
+	closed           bool
+	current          *usageScope
+	scopes           map[string]*usageScope
+	usageFlusher     func(context.Context) error
+	lifetimeOnce     sync.Once
+	lifetimeCtx      context.Context
+	cancelLifetime   context.CancelFunc
+	shutdownOnce     sync.Once
+	shutdownDone     chan struct{}
+	abortShutdown    chan struct{}
+	abortOnce        sync.Once
+	invalidKeys      invalidKeyLimiter
+	loginGuardMu     sync.RWMutex
+	loginGuard       ManagementLoginGuard
+	configuredAdmin  *configuredAdminConfig
+	billingProviders map[string]string
+	pricingRefresh   func(context.Context, *store.Store) error
+	financialMu      sync.Mutex
+	financialActive  map[string]financialAdmission
+	financialFailed  map[string]struct{}
 }
 
 const UsageScopeMetadataKey = "usermgmt_scope"
 
 type usageScope struct {
-	id            string
-	store         *store.Store
-	auth          *authState
-	accountant    *accountant
-	permissions   *permissionCache
-	audit         *auditWriter
-	activity      *requestActivityWriter
-	cfg           config.UserManagementConfig
-	leases        int
-	retired       bool
-	idle          chan struct{}
-	done          chan struct{}
-	cleanupCtx    context.Context
-	cancelCleanup context.CancelFunc
+	id               string
+	store            *store.Store
+	auth             *authState
+	accountant       *accountant
+	permissions      *permissionCache
+	audit            *auditWriter
+	activity         *requestActivityWriter
+	cfg              config.UserManagementConfig
+	leases           int
+	retired          bool
+	idle             chan struct{}
+	done             chan struct{}
+	cleanupCtx       context.Context
+	cancelCleanup    context.CancelFunc
+	priceRefreshDone chan struct{}
 }
 
 // Apply opens a replacement completely before publishing it. A failed enable or
@@ -85,6 +92,9 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 	oldStore, oldDSN, oldAuth, oldScope := r.store, r.dsn, r.auth, r.current
 	r.mu.RUnlock()
 	if !cfg.Enabled {
+		r.mu.Lock()
+		r.configuredAdmin = nil
+		r.mu.Unlock()
 		if oldStore == nil {
 			return nil
 		}
@@ -99,7 +109,7 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 	if errResolve != nil {
 		return errResolve
 	}
-	if oldStore != nil && oldDSN == dsn {
+	if oldStore != nil && oldDSN == dsn && oldScope.cfg.RequestActivity.SpoolDirectory == cfg.RequestActivity.SpoolDirectory {
 		r.mu.Lock()
 		r.cfg = cfg
 		oldScope.cfg = cfg
@@ -115,6 +125,10 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 	replacement, errOpen := store.Open(openCtx, store.Config{DSN: dsn})
 	if errOpen != nil {
 		return errOpen
+	}
+	if err := r.prepareConfiguredAdmin(openCtx, replacement); err != nil {
+		_ = replacement.Close()
+		return err
 	}
 	if r.lifetimeCtx.Err() != nil {
 		_ = replacement.Close()
@@ -133,7 +147,7 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 		id: scopeID, store: replacement, auth: replacementAuth, accountant: newAccountant(replacement), cfg: cfg,
 		permissions: newPermissionCache(replacement, ttl),
 		audit:       newAuditWriter(replacement),
-		activity:    newRequestActivityWriter(replacement, cfg.RequestActivity.RetentionDays),
+		activity:    newRequestActivityWriter(replacement, cfg.RequestActivity.RetentionDays, cfg.RequestActivity.SpoolDirectory),
 		idle:        make(chan struct{}), done: make(chan struct{}), cleanupCtx: cleanupCtx, cancelCleanup: cancelCleanup,
 	}
 	r.mu.Lock()
@@ -144,6 +158,7 @@ func (r *Runtime) Apply(ctx context.Context, cfg config.UserManagementConfig) er
 	r.store, r.cfg, r.dsn, r.auth, r.current = replacement, cfg, dsn, replacementAuth, scope
 	r.mu.Unlock()
 	r.retire(oldScope)
+	r.startPriceRefresh(scope)
 	log.Info("user management PostgreSQL connection established and schema ready")
 	return nil
 }
@@ -296,9 +311,11 @@ func (r *Runtime) BeginRequest(ctx context.Context) (func(), error) {
 	}
 	scope.leases++
 	r.mu.Unlock()
+	releaseCapture := beginCapturedProducer(ctx)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			releaseCapture()
 			r.releaseScope(scope)
 		})
 	}, nil
@@ -316,6 +333,9 @@ func (r *Runtime) releaseScope(scope *usageScope) {
 // HandleUsage implements usage.Plugin and only accepts this runtime's immutable
 // user identity/scope. Record.APIKey and recycled Gin contexts are never used to
 // select a user or database. Foreign/legacy records are simply ignored.
+// SynchronousUsage opts financial accounting into the pre-queue SDK callback.
+func (r *Runtime) SynchronousUsage() {}
+
 func (r *Runtime) HandleUsage(ctx context.Context, record usage.Record) {
 	if r == nil {
 		return
@@ -325,11 +345,12 @@ func (r *Runtime) HandleUsage(ctx context.Context, record usage.Record) {
 		return
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	scope := r.scopes[identity.Metadata[UsageScopeMetadataKey]]
+	r.mu.RUnlock()
 	if scope == nil {
 		return
 	}
+	r.recordFinancialUsage(ctx, scope, identity.Principal, record)
 	delta, errDelta := usageIncrement(identity.Principal, record, time.Now())
 	if errDelta != nil {
 		scope.accountant.drop("invalid token counters")
@@ -393,6 +414,10 @@ func (r *Runtime) finishRetirement(scope *usageScope) {
 	}
 	if errClose := scope.activity.close(cleanupCtx); errClose != nil {
 		log.WithError(errClose).Warn("user management request activity drain did not complete")
+	}
+	scope.cancelCleanup()
+	if scope.priceRefreshDone != nil {
+		<-scope.priceRefreshDone
 	}
 	scope.auth.close()
 	if errClose := scope.store.Close(); errClose != nil {

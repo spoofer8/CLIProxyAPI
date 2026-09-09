@@ -29,6 +29,14 @@ func (e *PolicyError) ResponseBody() []byte {
 	}
 	return []byte(`{"error":{"message":"This request is not permitted for this account","type":"permission_error","code":"model_not_permitted"}}`)
 }
+
+func (e *PolicyError) ResponseHeaders() http.Header {
+	var response interface{ ResponseHeaders() http.Header }
+	if errors.As(e.Cause, &response) {
+		return response.ResponseHeaders().Clone()
+	}
+	return nil
+}
 func IsPolicyError(err error) bool {
 	var policy *PolicyError
 	return errors.As(err, &policy)

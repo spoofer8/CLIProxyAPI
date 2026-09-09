@@ -6,10 +6,11 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
 )
 
 func TestRuntimeDisabledDoesNotConnect(t *testing.T) {
-	var runtime Runtime
+	runtime := Runtime{pricingRefresh: func(context.Context, *store.Store) error { return nil }}
 	cfg := config.UserManagementConfig{DSN: "invalid and unreachable", Session: config.UserManagementSessionConfig{TTL: "invalid"}}
 	if errApply := runtime.Apply(context.Background(), cfg); errApply != nil {
 		t.Fatal(errApply)
@@ -30,7 +31,7 @@ func TestRuntimeDisabledDoesNotConnect(t *testing.T) {
 }
 
 func TestRuntimeFailedEnableLeavesDisabled(t *testing.T) {
-	var runtime Runtime
+	runtime := Runtime{pricingRefresh: func(context.Context, *store.Store) error { return nil }}
 	cfg := config.UserManagementConfig{Enabled: true, DSN: "postgres://test:secret@localhost:%/test"}
 	if errApply := runtime.Apply(context.Background(), cfg); errApply == nil {
 		t.Fatal("invalid DSN should fail to enable")
@@ -48,13 +49,13 @@ func TestPostgresRuntimeReloadAndClose(t *testing.T) {
 		t.Skip("set CLIPROXY_USERMGMT_TEST_DSN to run PostgreSQL integration tests")
 	}
 	ctx := context.Background()
-	var runtime Runtime
+	runtime := Runtime{pricingRefresh: func(context.Context, *store.Store) error { return nil }}
 	t.Cleanup(func() {
 		if errClose := runtime.Close(); errClose != nil {
 			t.Error(errClose)
 		}
 	})
-	cfg := config.UserManagementConfig{Enabled: true, DSN: dsn}
+	cfg := config.UserManagementConfig{Enabled: true, DSN: dsn, RequestActivity: config.UserManagementRequestActivityConfig{SpoolDirectory: t.TempDir()}}
 	if errApply := runtime.Apply(ctx, cfg); errApply != nil {
 		t.Fatal(errApply)
 	}

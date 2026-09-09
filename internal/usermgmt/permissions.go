@@ -215,11 +215,18 @@ func (r *Runtime) permissionsForContext(ctx context.Context) (*compiledPermissio
 	if scope == nil {
 		return nil, unavailableScopeError()
 	}
+	if admission, ok := r.capturedAdmission(ctx, scope); ok && admission.admitted && admission.identityValidated {
+		return admission.permissions, nil
+	}
 	queryCtx, cancel := context.WithCancel(ctx)
 	stopCleanup := context.AfterFunc(scope.cleanupCtx, cancel)
 	defer func() { stopCleanup(); cancel() }()
-	if _, errIdentity := scope.auth.validateIdentity(queryCtx, identity.Principal, identity.Metadata["key_id"]); errIdentity != nil {
+	confirmed, errIdentity := r.validateRequestIdentity(queryCtx, scope, identity)
+	if errIdentity != nil {
 		return nil, unavailableScopeError()
+	}
+	if confirmed.SystemAdmin {
+		return nil, nil
 	}
 	permissions, errPermissions := scope.permissions.get(queryCtx, identity.Principal)
 	if errPermissions != nil {
@@ -238,7 +245,7 @@ func (r *Runtime) CheckPermissions(ctx context.Context, target sdkaccess.PolicyT
 	if !permissions.allows(target, false) {
 		return permissionDenied(target.RequestedModel)
 	}
-	return nil
+	return r.checkModelPrice(ctx, target)
 }
 
 // FilterProviders retains permitted fallback candidates in their original order.

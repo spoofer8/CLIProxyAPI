@@ -24,6 +24,14 @@ func (s *Server) applyAccessConfig(oldCfg, newCfg *config.Config) bool {
 		return false
 	}
 	if s.userManagement != nil {
+		s.userManagement.ConfigureBillingProviders(newCfg)
+		mainKey := ""
+		if len(newCfg.APIKeys) > 0 {
+			mainKey = newCfg.APIKeys[0]
+		}
+		if errAdmin := s.userManagement.ConfigureMainAPIKey(context.Background(), mainKey); errAdmin != nil {
+			log.WithError(errAdmin).Error("configured Admin identity unavailable; proxy access will fail closed")
+		}
 		var priority []sdkaccess.Provider
 		if provider := s.userManagement.AccessProvider(); provider != nil {
 			priority = append(priority, provider)

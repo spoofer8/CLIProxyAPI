@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -11,17 +12,21 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
+	sdkhandlers "github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -32,6 +37,7 @@ const captureTestAdmin = "capture-management-test"
 
 func newCaptureTestServer(t *testing.T, authManager *coreauth.Manager, options ...ServerOption) (*Server, *usermgmt.Runtime) {
 	t.Helper()
+	spoolDirectory := t.TempDir()
 	dsn := userManagementHTTPTestDSN(t)
 	preserveConfigAccessProvider(t)
 	t.Setenv("MANAGEMENT_PASSWORD", "")
@@ -49,7 +55,7 @@ func newCaptureTestServer(t *testing.T, authManager *coreauth.Manager, options .
 	}
 	cfg.RemoteManagement.SecretKey = string(secret)
 	cfg.RemoteManagement.AllowRemote = true
-	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn}
+	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn, RequestActivity: config.UserManagementRequestActivityConfig{SpoolDirectory: spoolDirectory}}
 	if err := runtime.Apply(context.Background(), cfg.UserManagement); err != nil {
 		t.Fatal(err)
 	}
@@ -132,17 +138,18 @@ func TestUserRequestCaptureOriginalBodyUsageAndAdminAccess(t *testing.T) {
 	if _, err := db.DB().Exec(`UPDATE cpa_request_activity SET at=now()-interval '8 days' WHERE id=$1`, item.ID); err != nil {
 		t.Fatal(err)
 	}
-	if got := adminGet("/v0/management/requests/"+item.ID, captureTestAdmin); got.Code != 404 {
-		t.Fatal("expired content remained visible")
+	if got := adminGet("/v0/management/requests/"+item.ID, captureTestAdmin); got.Code != 200 {
+		t.Fatal("full conversation content expired")
 	}
-	if count, err := db.DeleteExpiredRequestActivity(context.Background(), time.Now().Add(-7*24*time.Hour)); err != nil || count != 1 {
+	if count, err := db.DeleteExpiredRequestActivity(context.Background(), time.Now().Add(-7*24*time.Hour)); err != nil || count != 0 {
 		t.Fatalf("retention deletion count=%d error=%v", count, err)
 	}
 }
 
 func TestUserRequestCaptureEachOriginalWebsocketFrame(t *testing.T) {
 	authManager := coreauth.NewManager(nil, nil, nil)
-	authManager.RegisterExecutor(quotaHTTPExecutor{})
+	executor := &captureUsageExecutor{}
+	authManager.RegisterExecutor(executor)
 	const authID = "capture-ws-auth"
 	if _, err := authManager.Register(context.Background(), &coreauth.Auth{ID: authID, Provider: "quota-test", Status: coreauth.StatusActive}); err != nil {
 		t.Fatal(err)
@@ -156,6 +163,11 @@ func TestUserRequestCaptureEachOriginalWebsocketFrame(t *testing.T) {
 			done <- struct{}{}
 		}
 	}))
+	executor.runtime = runtime
+	db, _ := runtime.Snapshot()
+	if err := db.SavePrice(context.Background(), store.ModelPrice{ID: "capture-fixture-price", Provider: "quota-test", Model: "capture-ws-model", PriceRates: store.PriceRates{InputUSD: "1", OutputUSD: "1"}, Manual: true, UpdatedAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
 	httpServer := httptest.NewServer(server.engine)
 	t.Cleanup(httpServer.Close)
 	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpServer.URL, "http")+"/v1/responses", http.Header{"Authorization": []string{"Bearer " + captureTestKey}})
@@ -184,7 +196,7 @@ func TestUserRequestCaptureEachOriginalWebsocketFrame(t *testing.T) {
 	if err := runtime.FlushRequestActivity(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	db, _ := runtime.Snapshot()
+	db, _ = runtime.Snapshot()
 	items, err := db.ListRequestActivity(context.Background(), captureTestUserID, 20, 0, time.Now().Add(-time.Hour))
 	if err != nil || len(items) != 2 {
 		t.Fatalf("frame activity count=%d error=%v", len(items), err)
@@ -198,11 +210,150 @@ func TestUserRequestCaptureEachOriginalWebsocketFrame(t *testing.T) {
 	}
 }
 
-func TestRequestCaptureReaderBoundAndPassThrough(t *testing.T) {
+type captureUsageExecutor struct {
+	quotaHTTPExecutor
+	runtime *usermgmt.Runtime
+}
+
+func (e *captureUsageExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, request coreexecutor.Request, opts coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	e.runtime.HandleUsage(ctx, usage.Record{Provider: "quota-test", Model: request.Model, RequestedAt: time.Now(), Detail: usage.Detail{InputTokens: 1, OutputTokens: 1, TotalTokens: 2, TokenBreakdown: usage.NewSubsetTokenBreakdown(1, 0, 0, 1, 0, 2)}})
+	return e.quotaHTTPExecutor.ExecuteStream(ctx, auth, request, opts)
+}
+
+func TestRequestCaptureReaderDurableAndPassThrough(t *testing.T) {
 	input := strings.Repeat("x", usermgmt.MaxRequestCaptureInspectBytes+17)
-	reader := &requestCaptureReader{ReadCloser: io.NopCloser(strings.NewReader(input))}
+	var captured bytes.Buffer
+	reader := &requestCaptureReader{ReadCloser: io.NopCloser(strings.NewReader(input)), capture: func(body []byte) error { _, err := captured.Write(body); return err }}
 	output, err := io.ReadAll(reader)
-	if err != nil || string(output) != input || len(reader.preview) != usermgmt.MaxRequestCaptureInspectBytes || !reader.overflow {
-		t.Fatal("bounded capture altered stream or exceeded cap")
+	if err != nil || string(output) != input || captured.String() != input {
+		t.Fatal("durable capture altered or truncated stream")
+	}
+}
+
+func TestUserRequestCaptureCompressedStreamingAndFailedAdmission(t *testing.T) {
+	server, runtime := newCaptureTestServer(t, nil)
+	engine := gin.New()
+	release := make(chan struct{})
+	var calls atomic.Int32
+	original := []byte(`{"model":"fixture","messages":[{"role":"user","content":"compressed question"}]}`)
+	engine.POST("/v1/chat/completions", AuthMiddleware(server.accessManager), server.userManagementMiddleware(), func(c *gin.Context) {
+		calls.Add(1)
+		body, err := sdkhandlers.ReadRequestBody(c)
+		if err != nil || !bytes.Equal(body, original) {
+			t.Error("decoded original content changed", err)
+			c.Status(400)
+			return
+		}
+		c.Header("Content-Type", "text/event-stream")
+		_, _ = c.Writer.WriteString("data: {\"text\":\"first live chunk\"}\n\n")
+		c.Writer.Flush()
+		<-release
+		_, _ = c.Writer.WriteString("data: {\"text\":\"last live chunk\"}\n\n")
+		c.Writer.Flush()
+	})
+	httpServer := httptest.NewServer(engine)
+	defer httpServer.Close()
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := encoder.EncodeAll(original, nil)
+	encoder.Close()
+	request, err := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/chat/completions", bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+captureTestKey)
+	request.Header.Set("Content-Encoding", "zstd")
+	response, err := httpServer.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(response.Body)
+	first, err := reader.ReadString('\n')
+	close(release)
+	if err != nil || !strings.Contains(first, "first live chunk") {
+		t.Fatal("capture buffered streaming until completion", err)
+	}
+	if _, err := io.ReadAll(reader); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if err := runtime.FlushRequestActivity(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	db, _ := runtime.Snapshot()
+	items, err := db.ListRequestActivity(context.Background(), captureTestUserID, 10, 0, time.Time{})
+	if err != nil || len(items) != 1 {
+		t.Fatal("missing streaming request", err)
+	}
+	chunks, err := db.ListRequestContent(context.Background(), items[0].ID, "request", 0, 10)
+	if err != nil || len(chunks) != 1 || !strings.Contains(chunks[0].Text, "compressed question") {
+		t.Fatal("compressed conversation was not stored decoded", err)
+	}
+	chunks, err = db.ListRequestContent(context.Background(), items[0].ID, "response", 0, 10)
+	if err != nil || len(chunks) != 1 || !strings.Contains(chunks[0].Text, "last live chunk") {
+		t.Fatal("stream response incomplete", err)
+	}
+	if _, err := db.DB().Exec(`ALTER TABLE cpa_request_activity RENAME TO cpa_request_activity_offline`); err != nil {
+		t.Fatal(err)
+	}
+	reject := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(original))
+	reject.Header.Set("Authorization", "Bearer "+captureTestKey)
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, reject)
+	if _, err := db.DB().Exec(`ALTER TABLE cpa_request_activity_offline RENAME TO cpa_request_activity`); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != 503 || calls.Load() != 1 {
+		t.Fatal("failed durable admission contacted handler/upstream")
+	}
+}
+
+func TestUserWebsocketPrewarmDoesNotCreateMissingUsageBlock(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	executor := &captureUsageExecutor{}
+	manager.RegisterExecutor(executor)
+	const authID = "prewarm-accounting-auth"
+	if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: authID, Provider: "quota-test", Status: coreauth.StatusActive}); err != nil {
+		t.Fatal(err)
+	}
+	registry.GetGlobalRegistry().RegisterClient(authID, "quota-test", []*registry.ModelInfo{{ID: "prewarm-model", Object: "model"}})
+	defer registry.GetGlobalRegistry().UnregisterClient(authID)
+	server, runtime := newCaptureTestServer(t, manager)
+	executor.runtime = runtime
+	db, _ := runtime.Snapshot()
+	if err := db.SavePrice(context.Background(), store.ModelPrice{ID: "prewarm-price", Provider: "quota-test", Model: "prewarm-model", PriceRates: store.PriceRates{InputUSD: "1", OutputUSD: "1"}, Manual: true, UpdatedAt: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := httptest.NewServer(server.engine)
+	defer endpoint.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(endpoint.URL, "http")+"/v1/responses", http.Header{"Authorization": []string{"Bearer " + captureTestKey}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"prewarm-model","generate":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		_, payload, err := conn.ReadMessage()
+		if err != nil || bytes.Contains(payload, []byte(`"type":"error"`)) {
+			t.Fatalf("prewarm failed: %s %v", payload, err)
+		}
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","model":"prewarm-model","input":[{"role":"user","content":"after prewarm"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := conn.ReadMessage()
+	if err != nil || !bytes.Contains(payload, []byte("response.completed")) {
+		t.Fatalf("prewarm poisoned subsequent generation: %s %v", payload, err)
+	}
+	var reason string
+	if err := db.DB().QueryRow(`SELECT reason FROM cpa_financial_requests ORDER BY at ASC LIMIT 1`).Scan(&reason); err != nil || reason != "no_generation" {
+		t.Fatal("prewarm was not explicitly finalized as non-generating", reason, err)
 	}
 }

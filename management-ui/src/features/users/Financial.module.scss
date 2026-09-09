@@ -1,0 +1,189 @@
+@use '../../styles/variables' as *;
+.panel {
+  padding: $spacing-lg;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-lg;
+  background: var(--bg-primary);
+  min-width: 0;
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-md;
+  flex-wrap: wrap;
+  margin-bottom: $spacing-md;
+  h3 {
+    margin: 0;
+    font-size: 16px;
+  }
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $spacing-sm;
+}
+.hint {
+  margin: $spacing-xs 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: $spacing-md;
+}
+.metric {
+  min-width: 0;
+  padding: $spacing-md;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  background: var(--bg-secondary);
+}
+.metricLabel {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.amount {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: $spacing-sm;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.notice {
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  padding: $spacing-md;
+  margin: $spacing-md 0;
+  background: var(--bg-secondary);
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.blocked {
+  border-color: var(--error-color);
+}
+.form {
+  display: grid;
+  gap: $spacing-sm;
+}
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: $spacing-md;
+}
+.requestList {
+  margin-top: $spacing-sm;
+  max-height: 220px;
+  overflow: auto;
+}
+.requestRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: $spacing-sm;
+  padding: $spacing-sm 0;
+  border-top: 1px solid var(--border-color);
+  code {
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+}
+.events {
+  margin-top: $spacing-lg;
+}
+.event {
+  border-top: 1px solid var(--border-color);
+  padding: $spacing-md 0;
+  summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: $spacing-sm;
+  }
+}
+.pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
+  padding: $spacing-md;
+  background: var(--bg-secondary);
+  border-radius: $radius-md;
+}
+.catalog {
+  max-height: 340px;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  margin: $spacing-md 0;
+}
+.priceRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-md;
+  border-bottom: 1px solid var(--border-color);
+  padding: $spacing-md;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  &:last-child {
+    border-bottom: 0;
+  }
+  &:hover {
+    background: var(--bg-hover);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--text-primary);
+    outline-offset: -2px;
+  }
+}
+.priceModel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.priceNumber {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+  flex-shrink: 0;
+}
+.editor {
+  border-top: 1px solid var(--border-color);
+  margin-top: $spacing-md;
+  padding-top: $spacing-lg;
+}
+.tier {
+  border-left: 2px solid var(--border-color);
+  padding-left: $spacing-md;
+  margin: $spacing-sm 0;
+}
+@media (max-width: 980px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .panel {
+    padding: $spacing-md;
+  }
+  .grid,
+  .formGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .priceRow {
+    align-items: flex-start;
+  }
+}

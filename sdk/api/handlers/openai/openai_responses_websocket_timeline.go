@@ -289,6 +289,11 @@ func writeResponsesWebsocketPayload(writer *responsesWebsocketWriter, wsTimeline
 	if writer.closing.Load() {
 		return websocket.ErrCloseSent
 	}
+	if writer.capture != nil {
+		if errCapture := writer.capture(payload); errCapture != nil {
+			return errCapture
+		}
+	}
 	return writer.conn.WriteMessage(websocket.TextMessage, payload)
 }
 

@@ -18,6 +18,9 @@ type Result struct {
 	Provider  string
 	Principal string
 	Metadata  map[string]string
+	// SystemAdmin is set only from the authenticated account's persisted flag.
+	// It is not decoded from request metadata and conveys no management rights.
+	SystemAdmin bool `json:"-"`
 }
 
 var (

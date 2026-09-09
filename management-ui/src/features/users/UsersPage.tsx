@@ -3,15 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
-import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { IconPlus, IconRefreshCw, IconSearch, IconSettings } from '@/components/ui/icons';
 import { useHeaderRefresh } from '@/hooks/useHeaderRefresh';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
-import { usersApi, type ManagedUser, type UserManagementSettings } from '@/services/api/users';
+import { usersApi, type ManagedUser } from '@/services/api/users';
 import { getErrorMessage } from '@/utils/helpers';
 import { UserWorkspace } from './UserWorkspace';
-import { parseTokenLimit } from './logic';
+import { PricingDialog } from './PricingDialog';
 import { useSessionScope } from './useSessionScope';
 import styles from './UsersPage.module.scss';
 
@@ -27,27 +26,23 @@ export function UsersPage() {
 }
 
 function UsersSession() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const { current, signal } = useSessionScope();
   const notify = useNotificationStore((state) => state.showNotification);
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [total, setTotal] = useState(0);
   const [nextOffset, setNextOffset] = useState(0);
-  const [settings, setSettings] = useState<UserManagementSettings | null>(null);
   const [selected, setSelected] = useState('');
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refresh, setRefresh] = useState(0);
-  const [dialog, setDialog] = useState<'create' | 'settings' | null>(null);
+  const [dialog, setDialog] = useState<'create' | 'pricing' | null>(null);
   const [formError, setFormError] = useState('');
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [defaultLimit, setDefaultLimit] = useState('0');
-  const [enforce, setEnforce] = useState(false);
   const sequence = useRef(0);
-  const format = (value: number) => value.toLocaleString(i18n.language);
 
   const load = useCallback(
     async (offset = 0) => {
@@ -55,43 +50,28 @@ function UsersSession() {
       const request = ++sequence.current;
       setLoading(true);
       setError('');
-      const results = await Promise.allSettled([
-        usersApi.list(offset, signal()),
-        usersApi.settings(signal()),
-      ]);
-      if (!current() || request !== sequence.current) return;
-      const [people, config] = results;
-      if (people.status === 'fulfilled') {
+      try {
+        const people = await usersApi.list(offset, signal());
+        if (!current() || request !== sequence.current) return;
         setUsers((previous) =>
           offset
-            ? [
-                ...new Map(
-                  [...previous, ...people.value.users].map((user) => [user.id, user])
-                ).values(),
-              ]
-            : people.value.users
+            ? [...new Map([...previous, ...people.users].map((user) => [user.id, user])).values()]
+            : people.users
         );
-        setTotal(people.value.total);
-        setNextOffset(offset + people.value.users.length);
+        setTotal(people.total);
+        setNextOffset(offset + people.users.length);
         setSelected((previous) =>
-          offset || people.value.users.some((user) => user.id === previous)
+          offset || people.users.some((user) => user.id === previous)
             ? previous
-            : (people.value.users[0]?.id ?? '')
+            : (people.users[0]?.id ?? '')
+        );
+      } catch (failure) {
+        if (!current() || request !== sequence.current) return;
+        const status = (failure as { status?: number })?.status;
+        setError(
+          status === 404 ? t('users.unsupported') : getErrorMessage(failure, t('users.load_failed'))
         );
       }
-      if (config.status === 'fulfilled') setSettings(config.value);
-      const failure =
-        people.status === 'rejected'
-          ? people.reason
-          : config.status === 'rejected'
-            ? config.reason
-            : null;
-      if (failure)
-        setError(
-          failure.status === 404
-            ? t('users.unsupported')
-            : getErrorMessage(failure, t('users.load_failed'))
-        );
       setLoading(false);
     },
     [current, signal, t]
@@ -119,26 +99,17 @@ function UsersSession() {
     );
   }, []);
 
-  const open = (next: 'create' | 'settings') => {
+  const open = (next: 'create' | 'pricing') => {
     setFormError('');
-    if (next === 'settings' && settings) {
-      setDefaultLimit(String(settings.defaultMonthlyTokens));
-      setEnforce(settings.enforce);
-    }
     setDialog(next);
   };
 
   const save = async () => {
     if (!current() || busy) return;
     setFormError('');
-    const limit = parseTokenLimit(defaultLimit, 0);
-    if (dialog === 'settings' && limit === null) {
-      setFormError(t('users.quota_valid', { minimum: 0 }));
-      return;
-    }
     setBusy(true);
     try {
-      if (dialog === 'create') {
+      {
         const user = await usersApi.create(name, email, signal());
         if (!current()) return;
         // Keep the server offset separate from a newly created user pinned into this list.
@@ -152,13 +123,6 @@ function UsersSession() {
         setName('');
         setEmail('');
         notify(t('users.user_created'), 'success');
-      } else if (settings && limit !== null) {
-        await usersApi.saveSettings(limit, enforce, signal());
-        if (!current()) return;
-        sequence.current++;
-        setLoading(false);
-        setSettings({ ...settings, defaultMonthlyTokens: limit, enforce });
-        notify(t('users.settings_saved'), 'success');
       }
       setDialog(null);
     } catch (failure) {
@@ -176,9 +140,9 @@ function UsersSession() {
           <p className={styles.description}>{t('users.description')}</p>
         </div>
         <div className={styles.actions}>
-          <Button variant="secondary" onClick={() => open('settings')} disabled={!settings}>
+          <Button variant="secondary" onClick={() => open('pricing')}>
             <IconSettings size={16} />
-            {t('users.settings')}
+            {t('users.finance.pricing_title')}
           </Button>
           <Button onClick={() => open('create')}>
             <IconPlus size={16} />
@@ -236,11 +200,13 @@ function UsersSession() {
                 </span>
                 <span className={styles.userEmail}>{user.email}</span>
                 <span className={styles.userQuota}>
-                  {user.monthlyTokenLimit == null
-                    ? t('users.quota_default')
-                    : user.monthlyTokenLimit === 0
-                      ? t('users.quota_unlimited')
-                      : t('users.quota_monthly', { limit: format(user.monthlyTokenLimit) })}
+                  {t(
+                    user.systemAdmin
+                      ? 'users.system_admin'
+                      : user.role === 'admin'
+                        ? 'users.administrator'
+                        : 'users.standard_user'
+                  )}
                 </span>
               </button>
             ))}
@@ -273,7 +239,6 @@ function UsersSession() {
             <UserWorkspace
               key={selectedUser.id}
               initialUser={selectedUser}
-              settings={settings}
               refresh={refresh}
               onUpdated={updateUser}
             />
@@ -285,17 +250,17 @@ function UsersSession() {
         </div>
       </div>
       <Modal
-        open={dialog !== null}
+        open={dialog === 'create'}
         onClose={() => setDialog(null)}
         closeDisabled={busy}
-        title={t(dialog === 'create' ? 'users.create_user' : 'users.settings')}
+        title={t('users.create_user')}
         footer={
           <>
             <Button variant="secondary" disabled={busy} onClick={() => setDialog(null)}>
               {t('common.cancel')}
             </Button>
             <Button type="submit" form="users-page-form" loading={busy}>
-              {t(dialog === 'create' ? 'users.create_user' : 'common.save')}
+              {t('users.create_user')}
             </Button>
           </>
         }
@@ -307,40 +272,22 @@ function UsersSession() {
             void save();
           }}
         >
-          {dialog === 'create' ? (
-            <>
-              <Input
-                label={t('users.display_name')}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                maxLength={200}
-              />
-              <Input
-                label={t('users.email')}
-                type="email"
-                required
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                maxLength={254}
-              />
-            </>
-          ) : (
-            <>
-              <Input
-                label={t('users.default_limit')}
-                hint={t('users.zero_unlimited')}
-                type="number"
-                min="0"
-                step="1"
-                required
-                value={defaultLimit}
-                onChange={(event) => setDefaultLimit(event.target.value)}
-              />
-              <ToggleSwitch label={t('users.enforce')} checked={enforce} onChange={setEnforce} />
-              <p className={styles.hint}>{t('users.tracking_hint')}</p>
-              <p className={styles.hint}>{t('users.capture_hint')}</p>
-            </>
-          )}
+          <>
+            <Input
+              label={t('users.display_name')}
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxLength={200}
+            />
+            <Input
+              label={t('users.email')}
+              type="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              maxLength={254}
+            />
+          </>
           {formError && (
             <div className="error-box" role="alert">
               {formError}
@@ -348,6 +295,7 @@ function UsersSession() {
           )}
         </form>
       </Modal>
+      {dialog === 'pricing' && <PricingDialog open onClose={() => setDialog(null)} />}
     </div>
   );
 }

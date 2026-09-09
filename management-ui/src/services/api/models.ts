@@ -85,7 +85,12 @@ export const modelsApi = {
   /**
    * Fetch available models from /v1/models endpoint (for system info page)
    */
-  async fetchModels(baseUrl: string, apiKey?: string, headers: Record<string, string> = {}) {
+  async fetchModels(
+    baseUrl: string,
+    apiKey?: string,
+    headers: Record<string, string> = {},
+    options: { caseSensitive?: boolean; signal?: AbortSignal } = {}
+  ) {
     const endpoint = buildV1ModelsEndpoint(baseUrl);
     if (!endpoint) {
       throw new Error('Invalid base url');
@@ -98,9 +103,10 @@ export const modelsApi = {
 
     const response = await axios.get(endpoint, {
       headers: Object.keys(resolvedHeaders).length ? resolvedHeaders : undefined,
+      signal: options.signal,
     });
     const payload = response.data?.data ?? response.data?.models ?? response.data;
-    return normalizeModelList(payload, { dedupe: true });
+    return normalizeModelList(payload, { dedupe: !options.caseSensitive });
   },
 
   /**

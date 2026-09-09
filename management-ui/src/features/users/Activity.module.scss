@@ -1,0 +1,216 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-primary);
+}
+.heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.heading h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.heading p,
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+.filters {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.5fr) minmax(120px, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+.filters :global(.form-group) {
+  margin: 0;
+}
+.filters > .actions {
+  grid-column: 1 / -1;
+}
+.select {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.actions,
+.tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.list {
+  border-top: 1px solid var(--border-color);
+}
+.request {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.requestLine {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.requestLine strong {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.requestLine time {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.status,
+.errorStatus {
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.errorStatus {
+  color: var(--danger-color);
+  border-color: var(--danger-color);
+}
+.prompt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  width: 100%;
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.prompt:hover {
+  color: var(--primary-color);
+}
+.prompt:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 3px;
+}
+.requestFooter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.requestFooter > .actions {
+  margin-left: auto;
+}
+.sessionFilter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.sessionFilter code {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.empty {
+  margin: 0;
+  padding: 32px 12px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.metadata {
+  display: flex;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.metadata strong {
+  width: 100%;
+  color: var(--text-primary);
+  font-size: 16px;
+}
+.notice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.raw {
+  margin: 0;
+  padding: 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  max-height: 65vh;
+  color: var(--text-primary);
+}
+.loadMore {
+  display: flex;
+  justify-content: center;
+  padding: 8px;
+}
+@media (max-width: 768px) {
+  .panel {
+    padding: 16px;
+  }
+  .filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .requestLine time {
+    margin-left: 0;
+    width: 100%;
+  }
+  .requestFooter > .actions {
+    width: 100%;
+    margin-left: 0;
+  }
+}

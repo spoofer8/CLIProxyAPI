@@ -205,12 +205,17 @@ test('native shell uses the normal route, navigation, notifications and local un
   const auth = read('src/stores/useAuthStore.ts');
   expect(auth).toMatch(/addEventListener\('unauthorized',[\s\S]*?clearAuthState\(\)/);
   expect(auth).not.toMatch(/addEventListener\('unauthorized',[\s\S]*?getState\(\)\.logout\(\)/);
-  for (const locale of [zhCN, zhTW, ru]) {
-    expect(Object.keys(locale.users).sort()).toEqual(Object.keys(en.users).sort());
-    for (const [key, value] of Object.entries(en.users)) {
-      const translated = locale.users[key as keyof typeof locale.users];
-      expect(translated.length).toBeGreaterThan(0);
-      expect(translated.match(/\{\{\w+\}\}/g)).toEqual(value.match(/\{\{\w+\}\}/g));
+  const checkTranslations = (original: unknown, translated: unknown) => {
+    if (typeof original === 'string') {
+      expect(typeof translated).toBe('string');
+      expect((translated as string).length).toBeGreaterThan(0);
+      expect((translated as string).match(/\{\{\w+\}\}/g)).toEqual(original.match(/\{\{\w+\}\}/g));
+      return;
     }
-  }
+    const source = original as Record<string, unknown>;
+    const target = translated as Record<string, unknown>;
+    expect(Object.keys(target).sort()).toEqual(Object.keys(source).sort());
+    for (const key of Object.keys(source)) checkTranslations(source[key], target[key]);
+  };
+  for (const locale of [zhCN, zhTW, ru]) checkTranslations(en.users, locale.users);
 });

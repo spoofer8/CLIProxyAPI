@@ -1,0 +1,59 @@
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+}
+.hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: $spacing-lg;
+  padding: 0;
+  border: 0;
+  margin: 0;
+}
+.modes label {
+  display: inline-flex;
+  align-items: center;
+  gap: $spacing-sm;
+  cursor: pointer;
+}
+.models {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-md;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: $spacing-sm;
+  overflow-wrap: anywhere;
+}
+.patterns {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-sm;
+  border-top: 1px solid var(--border-color);
+  padding-top: $spacing-md;
+}
+.pattern {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-sm;
+  overflow-wrap: anywhere;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -14,6 +14,9 @@ const (
 	AuthErrorCodeInvalidCredential AuthErrorCode = "invalid_credential"
 	AuthErrorCodeNotHandled        AuthErrorCode = "not_handled"
 	AuthErrorCodeInternal          AuthErrorCode = "internal_error"
+	// Rejected is terminal: a managed credential boundary must not fall back
+	// to another provider that could accept the same key without attribution.
+	AuthErrorCodeRejected AuthErrorCode = "credential_rejected"
 )
 
 // AuthError carries authentication failure details and HTTP status.
@@ -68,6 +71,10 @@ func NewNoCredentialsError() *AuthError {
 
 func NewInvalidCredentialError() *AuthError {
 	return newAuthError(AuthErrorCodeInvalidCredential, "Invalid API key", http.StatusUnauthorized, nil)
+}
+
+func NewRejectedCredentialError() *AuthError {
+	return newAuthError(AuthErrorCodeRejected, "Invalid API key", http.StatusUnauthorized, nil)
 }
 
 func NewNotHandledError() *AuthError {

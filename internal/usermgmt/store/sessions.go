@@ -23,7 +23,7 @@ type SessionIdentity struct {
 
 func (s *Store) LoginUser(ctx context.Context, email string) (LoginUser, error) {
 	var user LoginUser
-	err := s.query().QueryRowContext(ctx, `SELECT `+userColumns+`,password_hash FROM cpa_users WHERE email=$1`, email).Scan(&user.ID, &user.Email, &user.DisplayName, &user.Role, &user.Status, &user.MonthlyTokenLimit, &user.CreatedAt, &user.UpdatedAt, &user.PasswordHash)
+	err := s.query().QueryRowContext(ctx, `SELECT `+userColumns+`,password_hash FROM cpa_users WHERE email=$1`, email).Scan(&user.ID, &user.Email, &user.DisplayName, &user.Role, &user.Status, &user.SystemAdmin, &user.MonthlyTokenLimit, &user.CreatedAt, &user.UpdatedAt, &user.PasswordHash)
 	return user, domainError("find login account", err)
 }
 

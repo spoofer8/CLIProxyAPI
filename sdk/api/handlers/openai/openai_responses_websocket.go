@@ -107,6 +107,7 @@ type responsesWebsocketWriter struct {
 	conn    *websocket.Conn
 	writeMu sync.Mutex
 	closing atomic.Bool
+	capture func([]byte) error
 }
 
 func newResponsesWebsocketWriter(conn *websocket.Conn) *responsesWebsocketWriter {
@@ -162,6 +163,12 @@ func (w *responsesWebsocketWriter) closeWithPayload(payload []byte) (bool, error
 	}
 	defer w.writeMu.Unlock()
 
+	if w.capture != nil {
+		if errCapture := w.capture(payload); errCapture != nil {
+			_ = w.conn.Close()
+			return false, errCapture
+		}
+	}
 	errWrite := w.conn.WriteMessage(websocket.TextMessage, payload)
 	errClose := w.conn.Close()
 	if errWrite != nil {
@@ -380,6 +387,9 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 			finishCapture(captureStatus)
 			finishCapture = nil
 		}
+		writer.writeMu.Lock()
+		writer.capture = nil
+		writer.writeMu.Unlock()
 	}
 	defer completeCapture()
 	for {
@@ -417,8 +427,26 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		}
 		frameCtx := c.Request.Context()
 		captureStatus = http.StatusOK
-		if hooks, ok := sdkaccess.RequestHooksFromContext(frameCtx); ok && hooks.Capture != nil {
-			frameCtx, finishCapture = hooks.Capture(frameCtx, requestModelName, payload)
+		if hooks, ok := sdkaccess.RequestHooksFromContext(frameCtx); ok {
+			if hooks.CaptureDurable != nil {
+				var errCapture error
+				frameCtx, finishCapture, errCapture = hooks.CaptureDurable(frameCtx, requestModelName, payload)
+				if errCapture != nil {
+					finishCapture = nil
+					if errWrite := writeResponsesWebsocketPayload(writer, wsTimelineLog, []byte(`{"type":"error","status":503,"error":{"message":"Request activity storage is unavailable","code":"activity_unavailable"}}`), time.Now()); errWrite != nil {
+						return
+					}
+					continue
+				}
+			} else if hooks.Capture != nil {
+				frameCtx, finishCapture = hooks.Capture(frameCtx, requestModelName, payload)
+			}
+			if hooks.CaptureContent != nil {
+				capturedFrameCtx := frameCtx
+				writer.writeMu.Lock()
+				writer.capture = func(response []byte) error { return hooks.CaptureContent(capturedFrameCtx, "response", "ws", response) }
+				writer.writeMu.Unlock()
+			}
 		}
 		executionParent := context.WithValue(frameCtx, "gin", c)
 		executionParent, routeOverridesModelResolution := h.PrepareStreamModelRoute(
@@ -543,6 +571,15 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 		requestJSON = h.prepareCodexMultiAgentV2Tools(c, requestJSON)
 
 		if !useUpstreamWebsocketPassthrough && shouldHandleResponsesWebsocketPrewarmLocally(payload, lastRequest, false) {
+			if hooks, ok := sdkaccess.RequestHooksFromContext(frameCtx); ok && hooks.CompleteNonGenerating != nil {
+				if errComplete := hooks.CompleteNonGenerating(frameCtx); errComplete != nil {
+					captureStatus = http.StatusServiceUnavailable
+					if errWrite := writeResponsesWebsocketPayload(writer, wsTimelineLog, []byte(`{"type":"error","status":503,"error":{"message":"Cost accounting is unavailable","code":"accounting_unavailable"}}`), time.Now()); errWrite != nil {
+						return
+					}
+					continue
+				}
+			}
 			if updated, errDelete := sjson.DeleteBytes(requestJSON, "generate"); errDelete == nil {
 				requestJSON = updated
 			}

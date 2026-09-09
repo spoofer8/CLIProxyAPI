@@ -19,6 +19,7 @@ import (
 )
 
 func TestNamedPanelSessionManagementAndAudit(t *testing.T) {
+	spoolDirectory := t.TempDir()
 	dsn := userManagementHTTPTestDSN(t)
 	preserveConfigAccessProvider(t)
 	t.Setenv("MANAGEMENT_PASSWORD", "")
@@ -35,7 +36,7 @@ func TestNamedPanelSessionManagementAndAudit(t *testing.T) {
 	}
 	cfg := &config.Config{AuthDir: t.TempDir(), CommercialMode: true}
 	cfg.RemoteManagement.SecretKey = string(hash)
-	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn}
+	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn, RequestActivity: config.UserManagementRequestActivityConfig{SpoolDirectory: spoolDirectory}}
 	if err := runtime.Apply(context.Background(), cfg.UserManagement); err != nil {
 		t.Fatal(err)
 	}

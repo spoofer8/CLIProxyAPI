@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -20,6 +21,9 @@ const AutoServiceTier = "auto"
 
 // Record contains the usage statistics captured for a single provider request.
 type Record struct {
+	// EventID identifies one published execution, preserved across retries/replay.
+	EventID string
+
 	Provider string
 	// ExecutorType stores the concrete executor type that handled the request.
 	ExecutorType string
@@ -240,6 +244,13 @@ type Plugin interface {
 	HandleUsage(ctx context.Context, record Record)
 }
 
+// SynchronousPlugin persists financial truth before Publish returns. Ordinary
+// analytics plugins continue through the asynchronous dispatcher.
+type SynchronousPlugin interface {
+	Plugin
+	SynchronousUsage()
+}
+
 type queueItem struct {
 	ctx     context.Context
 	record  Record
@@ -389,6 +400,17 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 	if m == nil {
 		return
 	}
+	if record.EventID == "" {
+		record.EventID = uuid.NewString()
+	}
+	m.pluginsMu.RLock()
+	synchronous := append([]Plugin(nil), m.plugins...)
+	m.pluginsMu.RUnlock()
+	for _, plugin := range synchronous {
+		if _, ok := plugin.(SynchronousPlugin); ok {
+			safeInvoke(plugin, ctx, record)
+		}
+	}
 	// ensure worker is running even if Start was not called explicitly
 	m.Start(context.Background())
 	m.mu.Lock()
@@ -434,6 +456,9 @@ func (m *Manager) dispatch(item queueItem) {
 	}
 	for _, plugin := range plugins {
 		if plugin == nil {
+			continue
+		}
+		if _, synchronous := plugin.(SynchronousPlugin); synchronous {
 			continue
 		}
 		safeInvoke(plugin, item.ctx, item.record)

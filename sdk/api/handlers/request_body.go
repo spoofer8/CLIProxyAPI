@@ -9,11 +9,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 )
 
 // ReadRequestBody reads the incoming request body and decodes supported
 // Content-Encoding values before handlers inspect JSON fields.
-func ReadRequestBody(c *gin.Context) ([]byte, error) {
+func ReadRequestBody(c *gin.Context) (body []byte, errBody error) {
+	defer func() {
+		if errBody == nil && c != nil && c.Request != nil {
+			if hooks, ok := sdkaccess.RequestHooksFromContext(c.Request.Context()); ok && hooks.CaptureContent != nil {
+				if errCapture := hooks.CaptureContent(c.Request.Context(), "request", "json", body); errCapture != nil {
+					body = nil
+					errBody = errCapture
+				}
+			}
+		}
+	}()
 	raw, err := c.GetRawData()
 	if err != nil {
 		return nil, err

@@ -38,10 +38,17 @@ func requestHookError(err error) *interfaces.ErrorMessage {
 		ResponseBody() []byte
 	}
 	if errors.As(err, &response) {
+		headers := http.Header{"Content-Type": []string{"application/json"}}
+		var responseHeaders interface{ ResponseHeaders() http.Header }
+		if errors.As(err, &responseHeaders) {
+			for key, values := range responseHeaders.ResponseHeaders() {
+				headers[key] = append([]string(nil), values...)
+			}
+		}
 		return &interfaces.ErrorMessage{
 			StatusCode: response.StatusCode(), Error: &requestHookFailure{err}, DirectResponse: true,
 			Body:    append([]byte(nil), response.ResponseBody()...),
-			Headers: http.Header{"Content-Type": []string{"application/json"}},
+			Headers: headers,
 		}
 	}
 	return executionErrorMessage(err)

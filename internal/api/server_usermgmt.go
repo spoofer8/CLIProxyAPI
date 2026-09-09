@@ -56,7 +56,11 @@ func (s *Server) userManagementMiddleware() gin.HandlerFunc {
 		}
 		s.attachUserRequestCapture(c, &hooks)
 		c.Request = c.Request.WithContext(sdkaccess.WithRequestHooks(c.Request.Context(), hooks))
-		finishCapture := s.beginUserHTTPRequestCapture(c)
+		finishCapture, errCapture := s.beginUserHTTPRequestCapture(c)
+		if errCapture != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": "Request activity storage is unavailable", "type": "server_error", "code": "activity_unavailable"}})
+			return
+		}
 		defer finishCapture()
 		if errCheck := s.userManagement.CheckRequest(c.Request.Context()); errCheck != nil {
 			var response interface {
@@ -64,6 +68,14 @@ func (s *Server) userManagementMiddleware() gin.HandlerFunc {
 				ResponseBody() []byte
 			}
 			if errors.As(errCheck, &response) {
+				var headers interface{ ResponseHeaders() http.Header }
+				if errors.As(errCheck, &headers) {
+					for key, values := range headers.ResponseHeaders() {
+						for _, value := range values {
+							c.Writer.Header().Add(key, value)
+						}
+					}
+				}
 				c.Data(response.StatusCode(), "application/json", response.ResponseBody())
 			} else {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"message": "User account is temporarily unavailable", "type": "server_error", "code": "account_unavailable"}})

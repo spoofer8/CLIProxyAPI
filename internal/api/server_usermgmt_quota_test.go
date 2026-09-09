@@ -24,10 +24,16 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-type quotaHTTPExecutor struct{ coreauth.ProviderExecutor }
+type quotaHTTPExecutor struct {
+	coreauth.ProviderExecutor
+	runtime *usermgmt.Runtime
+}
 
 func (quotaHTTPExecutor) Identifier() string { return "quota-test" }
-func (quotaHTTPExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+func (e quotaHTTPExecutor) ExecuteStream(ctx context.Context, _ *coreauth.Auth, request coreexecutor.Request, _ coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	if e.runtime != nil {
+		e.runtime.HandleUsage(ctx, usage.Record{Provider: "quota-test", Model: request.Model, RequestedAt: time.Now(), Detail: usage.Detail{InputTokens: 4, OutputTokens: 6, TotalTokens: 10, TokenBreakdown: usage.NewSubsetTokenBreakdown(4, 0, 0, 6, 0, 10)}})
+	}
 	chunks := make(chan coreexecutor.StreamChunk, 1)
 	chunks <- coreexecutor.StreamChunk{Payload: []byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_quota_test\",\"output\":[]}}\n\n")}
 	close(chunks)
@@ -37,13 +43,14 @@ func (quotaHTTPExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexec
 func TestUserQuotaHTTPAndEachResponsesWebsocketFrame(t *testing.T) {
 	dsn := userManagementHTTPTestDSN(t)
 	preserveConfigAccessProvider(t)
+	authDir, spoolDir, configDir := t.TempDir(), t.TempDir(), t.TempDir()
 	var runtime usermgmt.Runtime
 	t.Cleanup(func() {
 		if errClose := runtime.Close(); errClose != nil {
 			t.Error(errClose)
 		}
 	})
-	cfg := &config.Config{AuthDir: t.TempDir(), CommercialMode: true}
+	cfg := &config.Config{AuthDir: authDir, CommercialMode: true}
 	const managementKey = "local-quota-management-password"
 	secretHash, errHash := bcrypt.GenerateFromPassword([]byte(managementKey), bcrypt.MinCost)
 	if errHash != nil {
@@ -51,18 +58,24 @@ func TestUserQuotaHTTPAndEachResponsesWebsocketFrame(t *testing.T) {
 	}
 	cfg.RemoteManagement.SecretKey = string(secretHash)
 	cfg.APIKeys = []string{"quota-legacy-key"}
-	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn}
+	cfg.UserManagement = config.UserManagementConfig{Enabled: true, DSN: dsn, RequestActivity: config.UserManagementRequestActivityConfig{SpoolDirectory: spoolDir}}
 	cfg.UserManagement.Quota.Enforce = true
 	if errApply := runtime.Apply(context.Background(), cfg.UserManagement); errApply != nil {
 		t.Fatal(errApply)
 	}
 	db, _ := runtime.Snapshot()
-	limit := int64(10)
 	user, errCreate := db.CreateUser(context.Background(), store.User{
-		ID: "01KKKKKKKKKKKKKKKKKKKKKKKK", Email: "quota-http@example.test", Role: "user", Status: "active", MonthlyTokenLimit: &limit,
+		ID: "01KKKKKKKKKKKKKKKKKKKKKKKK", Email: "quota-http@example.test", Role: "user", Status: "active",
 	})
 	if errCreate != nil {
 		t.Fatal(errCreate)
+	}
+	spendingLimit := "0.00001"
+	if err := db.SetBudget(context.Background(), user.ID, store.BudgetLimits{DailyUSD: &spendingLimit}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SavePrice(context.Background(), store.ModelPrice{ID: "quota-test-price", Provider: "quota-test", Model: "quota-test-model", PriceRates: store.PriceRates{InputUSD: "1", OutputUSD: "1"}, Manual: true, Source: "integration fixture", UpdatedAt: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
 	}
 	const key = "sk-cpa-local-quota-integration-secret"
 	digest := sha256.Sum256([]byte(key))
@@ -71,7 +84,7 @@ func TestUserQuotaHTTPAndEachResponsesWebsocketFrame(t *testing.T) {
 	}
 	manager := sdkaccess.NewManager()
 	authManager := coreauth.NewManager(nil, nil, nil)
-	authManager.RegisterExecutor(quotaHTTPExecutor{})
+	authManager.RegisterExecutor(quotaHTTPExecutor{runtime: &runtime})
 	const authID = "quota-http-test-auth"
 	if _, errRegister := authManager.Register(context.Background(), &coreauth.Auth{ID: authID, Provider: "quota-test", Status: coreauth.StatusActive}); errRegister != nil {
 		t.Fatal(errRegister)
@@ -79,7 +92,7 @@ func TestUserQuotaHTTPAndEachResponsesWebsocketFrame(t *testing.T) {
 	registry.GetGlobalRegistry().RegisterClient(authID, "quota-test", []*registry.ModelInfo{{ID: "quota-test-model", Object: "model"}})
 	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient(authID) })
 	websocketFinished := make(chan struct{}, 4)
-	server := NewServer(cfg, authManager, manager, filepath.Join(t.TempDir(), "config.yaml"), WithUserManagement(&runtime), WithMiddleware(func(c *gin.Context) {
+	server := NewServer(cfg, authManager, manager, filepath.Join(configDir, "config.yaml"), WithUserManagement(&runtime), WithMiddleware(func(c *gin.Context) {
 		c.Next()
 		if c.Request.Method == http.MethodGet && c.Request.URL.Path == "/v1/responses" {
 			websocketFinished <- struct{}{}
@@ -96,7 +109,7 @@ func TestUserQuotaHTTPAndEachResponsesWebsocketFrame(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/json")
 		response := userManagementHTTPResponse(t, httpServer.Client(), req, want)
-		if want == http.StatusTooManyRequests && !strings.Contains(string(response["error"]), "quota_exceeded") {
+		if want == http.StatusTooManyRequests && (!strings.Contains(string(response["error"]), "budget_exceeded") || !strings.Contains(string(response["error"]), "available_at")) {
 			t.Fatal("quota rejection did not carry the OpenAI error code")
 		}
 	}
@@ -121,21 +134,10 @@ func TestUserQuotaHTTPAndEachResponsesWebsocketFrame(t *testing.T) {
 		}
 		return payload
 	}
-	if payload := readFrame(); strings.Contains(string(payload), "quota_exceeded") {
-		t.Fatal("under-limit WebSocket frame was rejected for quota")
+	if payload := readFrame(); !strings.Contains(string(payload), "response.completed") {
+		t.Fatalf("under-limit WebSocket frame failed: %s", payload)
 	}
-	authRequest := httptest.NewRequest(http.MethodGet, "/", nil)
-	authRequest.Header.Set("Authorization", "Bearer "+key)
-	identity, errAuth := runtime.AccessProvider().Authenticate(context.Background(), authRequest)
-	if errAuth != nil {
-		t.Fatal(errAuth)
-	}
-	usageContext := sdkaccess.WithResult(context.Background(), identity)
-	runtime.HandleUsage(usageContext, usage.Record{RequestedAt: time.Now(), Detail: usage.Detail{InputTokens: 4, OutputTokens: 6, TotalTokens: 10}})
-	if errFlush := runtime.FlushUsage(context.Background()); errFlush != nil {
-		t.Fatal(errFlush)
-	}
-	if payload := readFrame(); !strings.Contains(string(payload), "quota_exceeded") {
+	if payload := readFrame(); !strings.Contains(string(payload), "budget_exceeded") {
 		t.Fatalf("later WebSocket frame bypassed quota admission: %s", payload)
 	}
 	if errClose := conn.Close(); errClose != nil {
@@ -150,6 +152,9 @@ func TestUserQuotaHTTPAndEachResponsesWebsocketFrame(t *testing.T) {
 	request(http.MethodPost, "/v1/realtime/client_secrets", key, http.StatusForbidden)
 	request(http.MethodGet, "/v1/realtime", key, http.StatusForbidden)
 	request(http.MethodGet, "/v1/models", "quota-legacy-key", http.StatusOK)
+	if err := db.SetBudget(context.Background(), user.ID, store.BudgetLimits{}); err != nil {
+		t.Fatal(err)
+	}
 	unenforced := *cfg
 	unenforced.UserManagement.Quota.Enforce = false
 	if errApply := runtime.Apply(context.Background(), unenforced.UserManagement); errApply != nil {

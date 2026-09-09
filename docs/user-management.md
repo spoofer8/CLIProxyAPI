@@ -1,8 +1,10 @@
 # User management operations
 
-User management is an optional PostgreSQL-backed feature. Existing `api-keys`
-remain usable; enabling the feature does not replace client credentials or the
-management secret.
+User management is an optional PostgreSQL-backed feature with USD budgets,
+model restrictions, and durable request/response history. The first configured
+`api-keys` credential is attributed to the stable **System Admin** account while
+the feature is enabled. Its proxy access does not grant management access.
+Other configured credentials retain their existing behavior.
 
 ## Users & activity UI
 
@@ -11,41 +13,49 @@ panel's sidebar. The page shares the panel's layout, theme, language and login.
 Named administrator sessions and the panel's management-key login are supported.
 Existing `/users` bookmarks redirect to this native route.
 
-- Select a user to see monthly usage and their request history. Use **Edit
-  quota** to choose an inherited default, unlimited usage, or a custom monthly
-  token limit. **Quota settings** controls the global default and enforcement;
-  set the default to 0 for unlimited tokens. A limit is only enforced when
-  **Enforce token limits** is on.
-- Choose **Inspect request** in the request table to read its conversation,
-  system instructions, tool calls and tool results. **Sanitized JSON** shows
-  the retained request payload.
-  Model, status and time filters apply to the stored history, including older
-  pages. Tokens/provider information appears when reported by the executor.
-- **New user** and **API keys** provision client access. Requests must use
-  that user's issued API key to appear under their account. Shared legacy keys
-  are not attributed to individual users or included in this content history.
+- Select a user and choose **Edit budgets** to set any combination of lifetime,
+  daily, rolling 7-day, and rolling 30-day USD limits. All configured limits
+  apply. Blank means unlimited; zero blocks new spending. Daily limits reset
+  at midnight in `Europe/London`, including daylight-saving changes.
+- **Allowed models** chooses all configured models or selected case-sensitive
+  model IDs. Existing provider restrictions and model deny rules remain active.
+  Existing wildcard allow rules remain visible until deliberately removed.
+- **Model pricing** shows automatically refreshed models.dev defaults and
+  persistent manual overrides. Costs retain the price snapshot used for each
+  execution. Unmatched models require manual prices for budgeted users.
+- **Inspect request** shows the submitted conversation and model response,
+  including tools, system instructions, code, and sanitized raw content. Search,
+  model, status, time and explicit-session filters apply to stored history.
+  Content pages load incrementally without a storage text-size cap.
+- **New user** and **API keys** provision managed client credentials. The
+  configured main credential is never displayed in this account view; additional
+  managed keys are listed separately. System Admin usage, costs and activity
+  are recorded, but spending limits and model restrictions do not apply to it.
 
 Capture applies to new requests after deployment; historical prompts cannot be
 recovered when request logging was off. Ordinary HTTP requests and individual
-Responses WebSocket turns are recorded, including their original submitted
-content rather than a reconstructed conversation. Responses from the upstream
-are not stored, except for assistant messages already present in a client's
-submitted history.
+Responses WebSocket turns retain their submitted content and returned output.
+Older preview-only entries remain labelled as such. Financial accounting starts
+at activation; historical token counters are not converted into invented costs.
 
-Request activity defaults to enabled with seven days of retention. Override
-`user-management.request-activity.enabled` or `retention-days` (1–365) in config.
+Durable activity is mandatory for managed requests and retained indefinitely.
+The old `request-activity.enabled` and `retention-days` fields remain accepted
+for configuration compatibility but do not disable capture or expire full text.
 Authentication headers/query credentials are excluded; credential-shaped JSON
 fields, nested JSON tool credentials and inline file data are redacted/omitted.
 Text is displayed without executing HTML or loading remote attachments.
-Inspection is bounded to 4 MiB and each stored preview to 256 KiB; large valid
-requests retain a shortened preview of the latest user content. Omitted or
-truncated content is labelled. In-progress requests may not have their final
-content, status or usage yet; use **Refresh** after completion.
+Attachments retain metadata/references without binary contents. Summary previews
+and transport pages are bounded; the complete retained text is not. In-progress
+or interrupted requests clearly show when their content or usage is incomplete.
 
-Only management administrators may list or read captured content. The bounded
-writer is best effort: a database outage or full queue can leave activity
-missing, but does not fail or modify proxy requests. Monthly quota accounting
-remains separate from this diagnostic history.
+Only management administrators may list or read captured content. New admission
+requires a durable activity record and encrypted, fsynced recovery journal; a
+failure rejects admission with 503. Output is journaled before forwarding so
+accepted content can be recovered after a database outage or restart. Preserve
+the configured `spool-directory` and its private key alongside PostgreSQL.
+Already accepted requests may finish above a spending limit; later requests
+are blocked. Missing reliable usage requires manual **Resolve cost** with an
+audited total and explanation before further budgeted requests are allowed.
 
 The frontend source is vendored in `management-ui/` from upstream release
 `v1.22.15`. Build and deploy its single HTML bundle as `management.html` and keep
@@ -58,12 +68,12 @@ See [frontend provenance and build instructions](../management-ui/UPSTREAM.md).
 | --- | --- | --- |
 | 0 | PostgreSQL schema, configuration, startup and reload lifecycle | Implemented |
 | 1 | Users, hashed API keys, management API, usage identity | Implemented |
-| 2 | Monthly token accounting and quota rejection | Implemented |
+| 2 | Monthly token reporting (legacy token limits superseded by USD budgets) | Implemented |
 | 3 | Model/provider permissions and filtered model listings | Implemented |
 | 4 | Named administrator login, sessions and audit events | Implemented |
+| Extension | System Admin attribution, USD budgets, pricing, durable full activity | Implemented; deployment tracked separately |
 
-Phase 0 creates the tables needed by later phases. Their presence does not mean
-that quota enforcement, permissions, login, or audit recording are active.
+Current builds initialize the complete schema when the feature is enabled.
 
 ## PostgreSQL and configuration
 
@@ -116,8 +126,11 @@ user-management:
   enabled: true
   dsn: "${CLIPROXY_USERMGMT_DSN}"
   quota:
-    default-monthly-tokens: 2000000
+    default-monthly-tokens: 0 # Legacy compatibility; configure USD budgets in the panel.
     enforce: false
+  request-activity:
+    retention-days: 0
+    spool-directory: "/var/lib/cliproxyapi/activity-spool"
   session:
     ttl: "12h"
   cache:
@@ -146,7 +159,7 @@ When enabled, startup requires a reachable PostgreSQL database and a successful
 schema bootstrap. A failure prevents startup. Database errors omit connection
 details so that passwords are not included in normal error messages.
 
-Bootstrap creates these six tables and their indexes in one transaction:
+Bootstrap creates account tables plus financial/activity migrations and indexes:
 
 - `cpa_users`
 - `cpa_user_api_keys`
@@ -154,6 +167,9 @@ Bootstrap creates these six tables and their indexes in one transaction:
 - `cpa_usage_monthly`
 - `cpa_sessions`
 - `cpa_audit_events`
+
+Additional tables hold budgets, price snapshots, cost events, durable requests,
+and full content chunks. Use schema inspection to list the complete current set.
 
 Repeated startup is safe. Concurrent bootstrap attempts share an advisory lock.
 The application role needs permission to create tables and indexes in its
@@ -165,11 +181,11 @@ A failed replacement leaves the previous user-management settings active and
 logs the failure; unrelated valid configuration changes can still apply.
 Changing settings while retaining the same resolved DSN reuses the pool.
 
-With Phase 2, an admitted request keeps its original database identity across a
+An admitted request keeps its original database identity across a
 reload. The old store remains open until its usage producers finish and queued
 records drain, so late streaming usage is not charged to the replacement
-database. Shutdown gives cleanup a bounded budget; exceeding it can drop late
-records rather than block service termination indefinitely.
+database. Financial/activity persistence is independent of optional analytics
+queues. Shutdown has a bounded drain, with durable journals retained for replay.
 
 Set `user-management.enabled: false` to disable the feature and retire its
 connection pool after admitted work drains. Disabled mode does not validate its DSN or duration settings,
@@ -232,13 +248,14 @@ Revoking a key or disabling its user prevents subsequent authentication.
 Successful authentication is cached for the configured TTL. Mutations through
 the management API invalidate the cache immediately. Direct database edits can
 take up to that TTL to affect a previously cached credential. A database lookup
-failure rejects a user key with HTTP 401; legacy-key authentication can still
-fall through to the existing provider.
+failure rejects authentication. A main configured credential whose managed
+identity cannot be verified receives a terminal 503; it cannot fall back to
+untracked configured-key access while user management remains enabled.
 
 Phase 2 also revalidates the user/key before each execution on an established
 Responses WebSocket. An administrator's key revocation, account disable, or
 account deletion rejects subsequent frames with an authentication error even
-when quota enforcement is disabled. Already running upstream work may finish.
+regardless of spending limits. Already running upstream work may finish.
 
 ### Management API
 
@@ -264,16 +281,16 @@ key is idempotent. Deleting a user cascades to their keys, permissions, sessions
 and monthly counters; audit history is retained when audit recording is added.
 
 User objects contain `id`, `email`, `display_name`, `role`, `status`,
-`monthly_token_limit`, `created_at`, and `updated_at`. Key objects contain `id`,
+`system_admin`, `monthly_token_limit`, `created_at`, and `updated_at`. Key objects contain `id`,
 `user_id`, `key_prefix`, `label`, `status`, `last_used_at`, `created_at`, and
 `revoked_at`. Password hashes and key hashes are never returned. Phase 1 does
 not include monthly usage in user responses; Phase 2 adds the `usage` field
 described below.
 
-For `PATCH /users/:id`, omitting `monthly_token_limit` preserves its current
-value; JSON `null` clears the override so the configured default applies.
-Explicit zero or a negative integer means unlimited. This field is stored in
-Phase 1; enforcement begins in Phase 2.
+The `monthly_token_limit` field remains for compatibility and does not enforce
+spending in current builds. Use `/users/:id/budget` for USD limits. System Admin
+cannot be deleted, disabled or demoted; its identity survives main-key rotation.
+No password or managed API-key row is created for the configured credential.
 
 For command-line administration, put the authorization header in a private
 curl configuration file rather than command arguments. Create that file with
@@ -291,7 +308,7 @@ CURL_AUTH=/path/to/private-management.curl
 
 curl --fail-with-body --config "$CURL_AUTH" "$MGMT/users" \
   -H 'Content-Type: application/json' \
-  --data '{"email":"example@example.invalid","display_name":"Example user","role":"user","monthly_token_limit":2000000}'
+  --data '{"email":"example@example.invalid","display_name":"Example user","role":"user"}'
 
 USER_ID='<id returned by creation>'
 curl --fail-with-body --config "$CURL_AUTH" "$MGMT/users/$USER_ID"
@@ -351,7 +368,7 @@ Media/images/video, realtime, realtime client secrets, live calls, alpha search,
 and other unsupported authenticated routes return HTTP 403 with
 `endpoint_not_supported` for user keys. Existing legacy credentials keep their
 existing route access. This restriction prevents unaccounted routes from
-bypassing user quotas; it does not indicate that a model permission was denied.
+bypassing user budgets; it does not indicate that a model permission was denied.
 
 Phase 1 acceptance combines a real upstream completion using a newly issued
 key with integration tests that capture `usage.Record` and verify its user-ID
@@ -359,89 +376,61 @@ principal. The existing `/v0/management/usage-queue` consumes queued records;
 do not poll it as a read-only attribution check. The existing `api-key-usage`
 endpoint reports upstream credential activity, not per-user accounting.
 
-## Monthly quotas — Phase 2
+## USD spending and accounting
 
-The default shown above is two million tokens per user per UTC calendar month.
-An explicit user limit overrides the default; a nonpositive effective limit is
-unlimited. Monthly periods use `YYYY-MM`, so no reset job is required.
+Budgets use exact decimal USD strings. Lifetime totals begin at financial
+activation; daily totals use the current London calendar day; weekly and monthly
+windows cover the rolling previous 7 and 30 days. All configured limits apply.
+The API reports blocking limits and the earliest available time based on recorded
+spending. Exhausted lifetime limits require an administrator to increase/remove
+the limit. There are no automatic dollar defaults or historical backfills.
 
-Keep `quota.enforce: false` for the first week after accounting is implemented.
-Compare attributed token totals with upstream usage before enabling rejection.
-In Phase 0 these quota fields are configuration only: no counters are written
-and no request is rejected because of a quota.
+Each accepted execution records provider, actual billable model, token buckets,
+price snapshot, and charge. Public models.dev prices refresh for future executions;
+manual overrides persist. Unknown cache/reasoning buckets, missing reliable usage,
+unsupported service tiers and interrupted accounting remain unresolved rather
+than silently free. Budgeted admission fails when a required price is unavailable.
+An administrator resolves an ended request with its verified total USD cost and
+an audit note; the total cannot be below the already recorded charge.
 
-The limit check occurs before execution and rejects an exhausted quota
-with HTTP 429 and error code `quota_exceeded`. It does not reserve estimated
-tokens. Concurrent requests can all pass before earlier requests finish or
-their accounting becomes visible, so overshoot can exceed one request's token
-usage. This is not a strict reservation system.
+Concurrent accepted work is allowed to finish and can exceed a cap. This is not
+a prepaid reservation system: subsequent admission is blocked when recorded costs
+reach any configured limit or when unresolved accounting requires admin action.
 
-Phase 2 accounts through the shared usage-record pipeline, including streamed
-Responses. A bounded queue accepts up to 1,024 pending records and a worker
-writes them asynchronously. Database failures, an overloaded queue, or invalid
-negative/overflowing token values can drop records rather than fail an already
-executing request. Logs identify accounting failures without exposing keys.
-Legacy configured proxy keys remain exempt from user quotas and permissions.
+All paths below are relative to `/v0/management` and require management authentication:
 
-`request_count` counts upstream usage records/attempts, not necessarily client
-HTTP requests. A retry may produce another record. The accounting period is
-the request's start time in UTC, with the current time used only when that
-timestamp is missing. A positive reported total is used as supplied; otherwise
-the total falls back to input plus output tokens. Counters become visible after
-the worker commits, so allow for asynchronous processing when checking them.
+| Method and path | Behavior |
+| --- | --- |
+| `GET /users/:id/budget` | Budgets, spending, reset/availability times and unresolved requests |
+| `PUT /users/:id/budget` | Complete replacement of `lifetime_usd`, `daily_usd`, `weekly_usd`, `monthly_usd`; null/omitted means unlimited |
+| `GET /users/:id/cost-events?limit=50&offset=0` | Executions, known costs, token breakdown and price snapshots |
+| `POST /requests/:id/cost-resolution` | Verified total `cost_usd` plus `note`; running requests return 409 |
+| `GET /pricing` | Published defaults and manual overrides, USD per million tokens |
+| `PUT /pricing/override` | Set explicit provider/model rates, including optional cache/reasoning rates |
+| `DELETE /pricing/override?provider=...&model=...` | Restore the current published default |
+| `POST /pricing/refresh` | Refresh defaults while retaining manual overrides |
+| `GET /users/:id/requests` | History with `q`, `model`, `status`, `since`, `session_id`, `before`, `limit` filters |
+| `GET /requests/:id` | Request details and content metadata |
+| `GET /requests/:id/content?direction=request&after=0&limit=20` | Sanitized full text chunks; use `direction=response` for returned output |
 
-Quota reads use a short cache of committed database totals. Accounting writes
-invalidate that cache; queued records are not added optimistically. Concurrent
-requests, usage dispatch and persistence can still race ahead of the recorded
-usage. No request reserves tokens.
+Content responses include `chunks`, `next_after`, and `complete`. Chunks carry
+sequence, direction, format and text; read pages in order to reconstruct the
+retained JSON or newline-separated response events. Session grouping uses explicit
+reliable identifiers or established response relationships, never inferred timing.
 
-### Reporting API — Phase 2
+## Legacy monthly token reporting
 
-The following endpoints require Phase 2 and management authentication:
+The earlier monthly-token enforcement feature is superseded by USD budgets.
+`quota.default-monthly-tokens`, `quota.enforce`, and `monthly_token_limit` remain
+accepted for compatibility and do not reject current requests. Old deployments
+may still enforce them; deploy backend and native panel together.
 
-```text
-GET /v0/management/usage?period=2026-09&limit=50&offset=0
-GET /v0/management/usage?period=2026-09&user_id=<user-id>
-```
-
-Omitting `period` selects the current UTC month. The response is:
-
-```json
-{
-  "period": "2026-09",
-  "usage": [
-    {
-      "user_id": "<user-id>",
-      "email": "example@example.invalid",
-      "period": "2026-09",
-      "input_tokens": 12,
-      "output_tokens": 2,
-      "total_tokens": 14,
-      "request_count": 1,
-      "updated_at": "2026-09-07T12:00:00Z"
-    }
-  ],
-  "total": 1,
-  "limit": 50,
-  "offset": 0
-}
-```
-
-The all-users view includes accounts with zero usage. `GET /users/:id` also
-includes `usage` containing the same usage fields for the current month while
-retaining its existing account fields. This reporting reads counters and does
-not consume the separate usage queue.
-
-For live acceptance, create a temporary account with a tiny quota while
-production enforcement remains disabled. Run one normal and one streaming
-Responses request, wait for each counter update, and compare the upstream token
-usage with both the reporting API and PostgreSQL. The second request should
-still succeed after recorded usage exceeds the account limit. Test HTTP 429
-separately in a temporary loopback-only process using the same binary/database
-and `enforce: true`; an already exhausted user is rejected before upstream
-model resolution. Stop that process and remove its private configuration and
-temporary account when verification finishes. Production's first-week
-`enforce: false` setting stays unchanged throughout.
+`GET /v0/management/usage?period=2026-09&limit=50&offset=0` and the optional
+`user_id` filter continue to report UTC monthly token counters. `GET /users/:id`
+also includes current-month `usage`. These analytics counters are separate from
+the durable financial ledger and are not a basis for pricing historical work.
+`request_count` counts upstream usage records/attempts rather than necessarily
+client HTTP requests, so retries can produce multiple records.
 
 ## Permissions — Phase 3
 
@@ -533,7 +522,7 @@ checks above do not constitute a clean repository-wide race-test result.
 ## Named login and audit — Phase 4
 
 Named panel login requires an active user with `role: admin` and a password.
-No default administrator or email is chosen automatically. Acceptance uses
+The system Admin has no automatically assigned management password. Create a separate named administrator for panel login. Acceptance uses
 temporary accounts and removes them; create the first permanent administrator
 with your chosen email through the existing management API:
 

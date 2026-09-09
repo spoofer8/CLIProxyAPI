@@ -13,6 +13,7 @@ export interface ManagedUser {
   displayName: string;
   role: string;
   status: string;
+  systemAdmin: boolean;
   monthlyTokenLimit: number | null;
   usage?: MonthlyUsage;
 }
@@ -72,6 +73,7 @@ export function normalizeManagedUser(value: unknown): ManagedUser {
     displayName: string(raw.display_name),
     role: string(raw.role),
     status: string(raw.status),
+    systemAdmin: raw.system_admin === true,
     monthlyTokenLimit: optionalNumber(raw.monthly_token_limit),
     ...(raw.usage
       ? {

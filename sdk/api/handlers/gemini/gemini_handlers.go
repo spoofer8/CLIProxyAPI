@@ -151,7 +151,11 @@ func (h *GeminiAPIHandler) GeminiHandler(c *gin.Context) {
 	}
 
 	method := action[1]
-	rawJSON, _ := c.GetRawData()
+	rawJSON, errRead := handlers.ReadRequestBody(c)
+	if errRead != nil {
+		c.JSON(http.StatusBadRequest, handlers.ErrorResponse{Error: handlers.ErrorDetail{Message: "Invalid request body", Type: "invalid_request_error"}})
+		return
+	}
 
 	switch method {
 	case "generateContent":

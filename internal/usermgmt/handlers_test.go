@@ -21,6 +21,7 @@ import (
 
 func testRuntime(t *testing.T) (*Runtime, *gin.Engine, string) {
 	t.Helper()
+	spoolDirectory := t.TempDir()
 	dsn := os.Getenv("CLIPROXY_USERMGMT_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set CLIPROXY_USERMGMT_TEST_DSN for PostgreSQL integration tests")
@@ -42,7 +43,7 @@ func testRuntime(t *testing.T) (*Runtime, *gin.Engine, string) {
 		_ = db.Close()
 		t.Fatal("create integration schema failed")
 	}
-	runtime := &Runtime{}
+	runtime := &Runtime{pricingRefresh: func(context.Context, *store.Store) error { return nil }}
 	t.Cleanup(func() {
 		if errClose := runtime.Close(); errClose != nil {
 			t.Error(errClose)
@@ -58,7 +59,7 @@ func testRuntime(t *testing.T) (*Runtime, *gin.Engine, string) {
 	query.Set("search_path", schema)
 	parsed.RawQuery = query.Encode()
 	dsn = parsed.String()
-	if errApply := runtime.Apply(context.Background(), config.UserManagementConfig{Enabled: true, DSN: dsn}); errApply != nil {
+	if errApply := runtime.Apply(context.Background(), config.UserManagementConfig{Enabled: true, DSN: dsn, RequestActivity: config.UserManagementRequestActivityConfig{SpoolDirectory: spoolDirectory}}); errApply != nil {
 		t.Fatal(errApply)
 	}
 	engine := gin.New()
