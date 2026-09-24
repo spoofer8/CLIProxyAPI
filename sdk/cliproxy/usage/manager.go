@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -23,15 +24,22 @@ const AutoServiceTier = "auto"
 type Record struct {
 	// EventID identifies one published execution, preserved across retries/replay.
 	EventID string
-
+	// RequestID uniquely identifies this specific model execution instance (UUID v4).
+	RequestID string
+	// TraceID identifies the parent inbound HTTP request when available (8-character hex).
+	TraceID  string
 	Provider string
+	// BaseURL stores the configured upstream base URL when available.
+	BaseURL string
 	// ExecutorType stores the concrete executor type that handled the request.
-	ExecutorType string
-	Model        string
-	Alias        string
-	APIKey       string
-	AuthID       string
-	AuthIndex    string
+	ExecutorType    string
+	Model           string
+	Alias           string
+	APIKey          string
+	SessionID       string
+	ParentSessionID string
+	AuthID          string
+	AuthIndex       string
 	// AccessTokenSHA256 identifies the OAuth token version without exposing the token.
 	AccessTokenSHA256 string
 	AuthType          string
@@ -45,6 +53,8 @@ type Record struct {
 	RequestServiceTier string
 	// ResponseServiceTier stores the final tier reported by the upstream response.
 	ResponseServiceTier string
+	// ResponseModel stores the model name reported by the upstream response, empty when unknown.
+	ResponseModel string
 	// Generate reports whether the client requested actual generation.
 	// nil or true means generation is enabled; only an explicit false disables generation.
 	// Use GenerateFlag to set the value and GenerateEnabled to read it with the default.
@@ -85,6 +95,46 @@ type reasoningEffortContextKey struct{}
 type serviceTierContextKey struct{}
 type generateContextKey struct{}
 type streamContextKey struct{}
+type executionRequestIDContextKey struct{}
+type executionTraceIDContextKey struct{}
+
+// WithExecutionRequestID attaches a specific execution instance request ID to the context.
+func WithExecutionRequestID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithValue(ctx, executionRequestIDContextKey{}, strings.TrimSpace(requestID))
+}
+
+// ExecutionRequestIDFromContext retrieves the execution instance request ID from the context.
+func ExecutionRequestIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(executionRequestIDContextKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// WithTraceID attaches the parent inbound HTTP request ID to the context.
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithValue(ctx, executionTraceIDContextKey{}, strings.TrimSpace(traceID))
+}
+
+// TraceIDFromContext retrieves the parent inbound HTTP request ID from the context.
+func TraceIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(executionTraceIDContextKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
 
 // WithRequestedModelAlias stores the client-requested model name for usage sinks.
 func WithRequestedModelAlias(ctx context.Context, alias string) context.Context {
@@ -402,6 +452,20 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
 	}
 	if record.EventID == "" {
 		record.EventID = uuid.NewString()
+	}
+	if strings.TrimSpace(record.RequestID) == "" {
+		if reqID := ExecutionRequestIDFromContext(ctx); reqID != "" {
+			record.RequestID = reqID
+		} else {
+			record.RequestID = uuid.NewString()
+		}
+	}
+	if strings.TrimSpace(record.TraceID) == "" {
+		if trID := TraceIDFromContext(ctx); trID != "" {
+			record.TraceID = trID
+		} else if trID := internallogging.GetRequestID(ctx); trID != "" {
+			record.TraceID = trID
+		}
 	}
 	m.pluginsMu.RLock()
 	synchronous := append([]Plugin(nil), m.plugins...)

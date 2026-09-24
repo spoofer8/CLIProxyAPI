@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/access"
@@ -11,6 +12,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
@@ -131,6 +133,10 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 
 	applySignatureCacheConfig(oldCfg, cfg)
 
+	if oldCfg != nil && !reflect.DeepEqual(oldCfg.Antigravity.ConnectionPool, cfg.Antigravity.ConnectionPool) {
+		executor.ResetAntigravityTransports()
+	}
+
 	if s.handlers != nil && s.handlers.AuthManager != nil {
 		s.handlers.AuthManager.SetRetryConfig(cfg.RequestRetry, time.Duration(cfg.MaxRetryInterval)*time.Second, cfg.MaxRetryCredentials)
 	}
@@ -203,6 +209,7 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 	claudeAPIKeyCount := len(cfg.ClaudeKey)
 	codexAPIKeyCount := len(cfg.CodexKey)
 	xaiAPIKeyCount := len(cfg.XAIKey)
+	metaAPIKeyCount := len(cfg.MetaKey)
 	vertexAICompatCount := len(cfg.VertexCompatAPIKey)
 	openAICompatCount := 0
 	for i := range cfg.OpenAICompatibility {
@@ -213,8 +220,8 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 		openAICompatCount += len(entry.APIKeyEntries)
 	}
 
-	total := authEntries + geminiAPIKeyCount + interactionsAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + xaiAPIKeyCount + vertexAICompatCount + openAICompatCount
-	fmt.Printf("server clients and configuration updated: %d clients (%d auth entries + %d Gemini API keys + %d Interactions API keys + %d Claude API keys + %d Codex keys + %d xAI keys + %d Vertex-compat + %d OpenAI-compat)\n",
+	total := authEntries + geminiAPIKeyCount + interactionsAPIKeyCount + claudeAPIKeyCount + codexAPIKeyCount + xaiAPIKeyCount + metaAPIKeyCount + vertexAICompatCount + openAICompatCount
+	fmt.Printf("server clients and configuration updated: %d clients (%d auth entries + %d Gemini API keys + %d Interactions API keys + %d Claude API keys + %d Codex keys + %d xAI keys + %d Meta API keys + %d Vertex-compat + %d OpenAI-compat)\n",
 		total,
 		authEntries,
 		geminiAPIKeyCount,
@@ -222,6 +229,7 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 		claudeAPIKeyCount,
 		codexAPIKeyCount,
 		xaiAPIKeyCount,
+		metaAPIKeyCount,
 		vertexAICompatCount,
 		openAICompatCount,
 	)
