@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/tidwall/sjson"
 )
 
@@ -199,9 +199,9 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 				selection.End("request_intercepted")
 				return cliproxyexecutor.Response{}, errIntercept
 			}
+			execReq = attachResolvedExecutionModelInfo(routing, execReq, preparedAuth, routeModel, upstreamModel, restoreExecutionModel)
 			if !restoreExecutionModel {
-				execReq = attachResolvedAPIKeyModelInfo(routing, execReq, preparedAuth, routeModel, upstreamModel)
-				execReq = attachResolvedHomeModelInfo(execReq, selection.modelInfo)
+				execReq = attachResolvedHomeModelInfo(execReq, preparedAuth, routeModel, selection.modelInfo, selection.configurationUpdateSupport)
 			}
 			if errCtx := execCtx.Err(); errCtx != nil {
 				releaseAttempt()
@@ -233,11 +233,12 @@ func (m *Manager) executeHomeOnce(ctx context.Context, providers []string, req c
 			if countTokens {
 				executorCtx = withAccessTokenFingerprintObserver(execCtx, setEffectiveAuth)
 			}
+			executor := executorForAuth(selection.Executor, preparedAuth)
 			execute := func() (cliproxyexecutor.Response, error) {
 				if countTokens {
-					return executeWithRequestPolicy(executorCtx, selection.Executor, preparedAuth, execReq, execOpts, true)
+					return executeWithRequestPolicy(executorCtx, executor, preparedAuth, execReq, execOpts, true)
 				}
-				return executeWithRequestPolicy(execCtx, selection.Executor, preparedAuth, execReq, execOpts, false)
+				return executeWithRequestPolicy(execCtx, executor, preparedAuth, execReq, execOpts, false)
 			}
 			startHomeExec := time.Now()
 			response, errExecute = execute()

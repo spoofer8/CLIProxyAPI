@@ -4,7 +4,7 @@
 // embed CLIProxyAPI without importing internal packages.
 package config
 
-import internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+import internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 
 type SDKConfig = internalconfig.SDKConfig
 
@@ -21,6 +21,7 @@ type UserManagementQuotaConfig = internalconfig.UserManagementQuotaConfig
 type UserManagementSessionConfig = internalconfig.UserManagementSessionConfig
 type UserManagementCacheConfig = internalconfig.UserManagementCacheConfig
 type OAuthModelAlias = internalconfig.OAuthModelAlias
+type OAuthModelSetting = internalconfig.OAuthModelSetting
 type PayloadConfig = internalconfig.PayloadConfig
 type PayloadRule = internalconfig.PayloadRule
 type PayloadFilterRule = internalconfig.PayloadFilterRule
@@ -50,6 +51,10 @@ func LoadConfig(configFile string) (*Config, error) { return internalconfig.Load
 
 func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	return internalconfig.LoadConfigOptional(configFile, optional)
+}
+
+func ResolveOAuthModelSetting(settings []OAuthModelSetting, modelID, metadataModelID, modelName string) *OAuthModelSetting {
+	return internalconfig.ResolveOAuthModelSetting(settings, modelID, metadataModelID, modelName)
 }
 
 func ParseConfigBytes(data []byte) (*Config, error) { return internalconfig.ParseConfigBytes(data) }

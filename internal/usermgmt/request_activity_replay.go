@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	cliproxysession "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/session"
+	cliproxysession "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/klauspost/compress/zstd"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usermgmt/store"
 	"github.com/tidwall/gjson"
 )
 

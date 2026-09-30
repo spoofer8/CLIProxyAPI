@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usermgmt/store"
 )
 
 // Replay makes metadata and content passes over encrypted frames. Raw and

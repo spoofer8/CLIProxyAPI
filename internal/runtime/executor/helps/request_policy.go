@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strings"
 
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 )
 
 // Final model inspection is bounded even for non-replayable request bodies.

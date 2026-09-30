@@ -7,7 +7,7 @@ import (
 	"time"
 	_ "time/tzdata"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usermgmt/store"
 )
 
 type SpendTotals struct {

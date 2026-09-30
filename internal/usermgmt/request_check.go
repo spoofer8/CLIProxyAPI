@@ -3,7 +3,7 @@ package usermgmt
 import (
 	"context"
 
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 )
 
 // CheckRequest revalidates the current user/key state before checking quota.

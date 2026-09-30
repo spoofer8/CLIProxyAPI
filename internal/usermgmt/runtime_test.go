@@ -5,8 +5,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usermgmt/store"
 )
 
 func TestRuntimeDisabledDoesNotConnect(t *testing.T) {

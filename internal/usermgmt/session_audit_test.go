@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/usermgmt/store"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/usermgmt/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
